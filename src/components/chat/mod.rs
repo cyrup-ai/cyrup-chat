@@ -1,0 +1,83 @@
+mod view;
+pub use view::ChatComponent;
+
+use chrono::{DateTime, Local};
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChatMessage {
+    pub id: String,
+    pub sender: MessageSender,
+    pub content: String,
+    pub timestamp: DateTime<Local>,
+    pub in_reply_to: Option<String>,        // Parent message ID
+    pub reply_to_author: Option<String>,    // Parent author name (for display)
+    pub pinned: bool,                       // Pin to top of conversation (max 5)
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum MessageSender {
+    User,
+    Cyrup,
+    System,
+    Tool,
+}
+
+impl ChatMessage {
+    /// Create ChatMessage from database Message
+    ///
+    /// Uses database Message.id instead of generating random UUID.
+    /// Converts Utc timestamp to Local for display.
+    pub fn from_db_message(msg: crate::view_model::message::Message) -> Self {
+        use crate::view_model::message::AuthorType;
+        use chrono::TimeZone;
+
+        let sender = match msg.author_type {
+            AuthorType::Human => MessageSender::User,
+            AuthorType::Agent => MessageSender::Cyrup,
+            AuthorType::System => MessageSender::System,
+            AuthorType::Tool => MessageSender::Tool,
+        };
+
+        // Convert Utc to Local timezone
+        let local_timestamp = chrono::Local
+            .timestamp_opt(msg.timestamp.timestamp(), 0)
+            .single()
+            .unwrap_or_else(chrono::Local::now);
+
+        Self {
+            id: msg.id.0, // Use database ID, not random UUID
+            sender,
+            content: msg.content,
+            timestamp: local_timestamp,
+            in_reply_to: msg.in_reply_to.as_ref().map(|id| id.0.clone()),
+            reply_to_author: None,  // Will be populated when loading thread context
+            pinned: msg.pinned,
+        }
+    }
+
+    #[allow(dead_code)] // Constructor for user messages - pending chat UI integration
+    pub fn new_user(content: String) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            sender: MessageSender::User,
+            content,
+            timestamp: Local::now(),
+            in_reply_to: None,
+            reply_to_author: None,
+            pinned: false,
+        }
+    }
+
+    #[allow(dead_code)] // Constructor for Cyrup AI messages - pending chat UI integration
+    pub fn new_cyrup(content: String) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            sender: MessageSender::Cyrup,
+            content,
+            timestamp: Local::now(),
+            in_reply_to: None,
+            reply_to_author: None,
+            pinned: false,
+        }
+    }
+}

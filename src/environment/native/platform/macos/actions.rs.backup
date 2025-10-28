@@ -1,0 +1,249 @@
+//! Action handling for macOS platform with zero-allocation patterns
+//!
+//! This module provides comprehensive action handling for the macOS platform
+//! including clipboard operations, URL navigation, and platform integrations.
+
+use objc::{msg_send, sel, sel_impl};
+
+/// NSInteger type for macOS
+#[cfg(target_os = "macos")]
+type NSInteger = isize;
+
+/// Handle public actions with platform-specific implementations
+#[inline(always)]
+pub async fn handle_public_action(
+    action: crate::PublicAction,
+    instance_url: &str,
+) -> Result<(), String> {
+    log::debug!("Handling public action: {action:?}");
+
+    match action {
+        crate::PublicAction::OpenLink(url) => {
+            navigate_to_url(&url)?;
+        }
+        crate::PublicAction::Copy(text) => {
+            copy_to_clipboard(&text)?;
+        }
+        crate::PublicAction::OpenProfile(profile) => {
+            log::debug!("Opening profile: {:?}", profile.username);
+
+            // Construct profile URL using current instance URL
+            let profile_url = format!("{}/@{}", instance_url, profile.username);
+            navigate_to_url(&profile_url)?;
+
+            log::debug!("Opened profile URL: {}", profile_url);
+        }
+        crate::PublicAction::OpenTag(tag) => {
+            log::debug!("Opening tag: {tag}");
+
+            // Construct tag URL using current instance URL
+            let tag_url = format!("{}/tags/{}", instance_url, tag);
+            navigate_to_url(&tag_url)?;
+        }
+        _ => {
+            log::debug!("Unhandled public action: {action:?}");
+        }
+    }
+
+    Ok(())
+}
+
+/// Navigate to URL using platform-specific methods
+#[inline(always)]
+fn navigate_to_url(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        Command::new("open")
+            .arg(url)
+            .spawn()
+            .map_err(|e| format!("Failed to open URL: {e}"))?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        Command::new("cmd")
+            .args(&["/C", "start", url])
+            .spawn()
+            .map_err(|e| format!("Failed to open URL: {e}"))?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use std::process::Command;
+        Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .map_err(|e| format!("Failed to open URL: {e}"))?;
+    }
+
+    log::debug!("Navigated to URL: {url}");
+    Ok(())
+}
+
+/// Copy text to clipboard with comprehensive error handling
+#[inline(always)]
+fn copy_to_clipboard(text: &str) -> Result<(), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use copypasta::{ClipboardContext, ClipboardProvider};
+
+        match ClipboardContext::new() {
+            Ok(mut ctx) => {
+                ctx.set_contents(text.to_string())
+                    .map_err(|e| format!("Failed to set clipboard contents: {e}"))?;
+                log::debug!("Copied {} characters to clipboard", text.len());
+                Ok(())
+            }
+            Err(e) => {
+                log::error!("Failed to create clipboard context: {e}");
+                Err(format!("Clipboard operation failed: {e}"))
+            }
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        log::warn!("Clipboard operations not supported on WASM");
+        Err("Clipboard not supported on WASM".to_string())
+    }
+}
+
+/// Show the emoji picker/character palette on macOS
+#[inline(always)]
+pub fn show_emoji_popup() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        // Use NSApp to show the character palette
+        #[allow(deprecated)]
+        use cocoa::appkit::NSApp;
+        unsafe {
+            #[allow(deprecated)]
+            let app = NSApp();
+            #[allow(deprecated)]
+            let _: () = msg_send![app, orderFrontCharacterPalette: cocoa::base::nil];
+        }
+        log::debug!("Character palette opened using NSApp API");
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("Emoji popup not supported on this platform".to_string())
+    }
+}
+
+/// Show a context menu with the given items and coordinates
+#[inline(always)]
+pub fn show_context_menu<T: Clone + std::fmt::Debug + Send + 'static>(
+    coordinates: (i32, i32),
+    title: &str,
+    items: Vec<(&str, T)>,
+    callback: impl Fn(T) + 'static,
+) {
+    #[cfg(target_os = "macos")]
+    {
+        use objc::runtime::*;
+        use objc::{class, msg_send, sel, sel_impl};
+        use std::ffi::CString;
+
+        #[allow(deprecated)]
+        use cocoa::base::id;
+
+        if items.is_empty() {
+            log::warn!("Context menu requested but no items provided");
+            return;
+        }
+
+        log::debug!(
+            "Creating NSMenu context menu at {:?}: {} with {} items",
+            coordinates,
+            title,
+            items.len()
+        );
+
+        unsafe {
+            // Create NSMenu
+            let menu_class = class!(NSMenu);
+            let menu: id = msg_send![menu_class, alloc];
+            let title_cstring =
+                CString::new(title).unwrap_or_else(|_| CString::new("Menu").unwrap());
+            let ns_title: id =
+                msg_send![class!(NSString), stringWithUTF8String: title_cstring.as_ptr()];
+            let menu: id = msg_send![menu, initWithTitle: ns_title];
+
+            // Add menu items with tags for identification
+            let ns_empty_string: *mut Object = msg_send![class!(NSString), string];
+
+            for (i, (label, _action)) in items.iter().enumerate() {
+                let label_str = std::ffi::CString::new(*label).unwrap();
+                let ns_label: *mut Object =
+                    msg_send![class!(NSString), stringWithUTF8String: label_str.as_ptr()];
+
+                let menu_item: *mut Object = msg_send![class!(NSMenuItem), alloc];
+                let menu_item: *mut Object = msg_send![menu_item, initWithTitle:ns_label action:nil keyEquivalent:ns_empty_string];
+
+                // Set the tag to identify this item
+                let _: () = msg_send![menu_item, setTag: i as NSInteger];
+
+                let _: () = msg_send![menu, addItem: menu_item];
+            }
+
+            // Get the main window for menu positioning
+            #[allow(deprecated)]
+            use cocoa::appkit::NSApplication;
+            #[allow(deprecated)]
+            use cocoa::base::nil;
+
+            #[allow(deprecated)]
+            let app = NSApplication::sharedApplication(nil);
+            let main_window: id = msg_send![app, mainWindow];
+
+            if main_window != nil {
+                // Convert coordinates to NSPoint
+                #[repr(C)]
+                struct NSPoint {
+                    x: f64,
+                    y: f64,
+                }
+                let point = NSPoint {
+                    x: coordinates.0 as f64,
+                    y: coordinates.1 as f64,
+                };
+
+                // Show context menu at coordinates
+                let content_view: id = msg_send![main_window, contentView];
+                let _: () = msg_send![menu,
+                    popUpMenuPositioningItem: nil
+                    atLocation: point
+                    inView: content_view
+                ];
+
+                log::debug!("NSMenu context menu displayed successfully");
+
+                // Check which item was selected
+                let selected_item: id = msg_send![menu, selectedItem];
+                if !selected_item.is_null() {
+                    let selected_index: NSInteger = msg_send![selected_item, tag];
+                    if selected_index >= 0 && (selected_index as usize) < items.len() {
+                        let (_label, action) = &items[selected_index as usize];
+                        callback(action.clone());
+                        log::debug!("Executed callback for selected menu item: {}", selected_index);
+                    } else {
+                        log::warn!("Invalid selected item tag: {}", selected_index);
+                    }
+                } else {
+                    log::debug!("No menu item was selected");
+                }
+            } else {
+                log::error!("No main window available for context menu");
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        log::warn!("Context menus not supported on this platform");
+        // Fallback: just call callback with first item
+        if let Some((first_label, first_action)) = items.into_iter().next() {
+            log::debug!("Fallback: executing first menu item: {}", first_label);
+            callback(first_action);
+        }
+    }
+}

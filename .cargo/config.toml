@@ -1,0 +1,3 @@
+# [build]
+# rustflags configuration removed to fix dioxus CLI encoding error
+# The --check-cfg flag with complex values causes "Failed to encode RUSTFLAGS"

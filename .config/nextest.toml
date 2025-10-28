@@ -1,0 +1,46 @@
+# Nextest Configuration for Cyrup
+# Optimized for fast, reliable testing with comprehensive coverage
+
+[profile.default]
+# Test execution settings
+retries = 2
+slow-timeout = { period = "60s", terminate-after = 2 }
+leak-timeout = "100ms"
+
+# Test discovery and filtering
+test-threads = "num-cpus"
+status-level = "all"
+final-status-level = "fail"
+
+# Output formatting
+failure-output = "immediate-final"
+success-output = "never"
+
+[profile.ci]
+# CI-optimized profile for automated testing
+retries = 3
+fail-fast = true
+slow-timeout = { period = "120s", terminate-after = 1 }
+
+# Stricter settings for CI
+test-threads = "num-cpus"
+status-level = "all"
+failure-output = "immediate-final"
+
+[profile.coverage]
+# Profile for code coverage analysis
+retries = 0
+test-threads = 1
+status-level = "all"
+
+# No timeouts to avoid coverage artifacts
+slow-timeout = { period = "300s" }
+
+[profile.bench]
+# Profile for benchmarking
+retries = 0
+test-threads = 1
+status-level = "all"
+
+# Extended timeouts for benchmarks
+slow-timeout = { period = "600s" }

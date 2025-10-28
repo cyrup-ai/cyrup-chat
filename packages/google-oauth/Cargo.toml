@@ -1,0 +1,47 @@
+[package]
+name = "google-oauth"
+version = "0.1.0"
+authors = ["David Maple <david@cyrup.ai>"]
+license = "MIT"
+description = "Pure Rust implementation of Google OAuth 2.0 browser flow with chainable API"
+repository = "https://github.com/cyrup-ai/google-oauth"
+keywords = ["oauth", "google", "authentication", "api", "async"]
+categories = ["authentication", "api-bindings", "web-programming"]
+edition = "2021"
+
+[dependencies]
+# HTTP and networking
+reqwest = { version = "0.12.18", features = ["json"] }
+url = "2.5.4"
+hyper = "1.6"
+
+# Async runtime
+tokio = { version = "1.45.1", features = ["net", "io-util", "time"] }
+futures = "0.3.31"
+
+# Data structures and serialization
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+thiserror = "2.0.12"
+anyhow = "1.0.98"
+
+# Utilities
+uuid = { version = "1.17.0", features = ["v4"] }
+urlencoding = "2.1.3"
+maud = "0.27.0"
+webbrowser = "1.0.5"
+env_logger = "0.11.8"
+log = "0.4.27"
+
+# PKCE cryptographic support
+sha2 = "0.10"
+base64 = "0.22"
+rand = "0.8"
+
+# Memory security for sensitive data
+zeroize = { version = "1.7", features = ["zeroize_derive"] }
+
+[dev-dependencies]
+tokio-test = "0.4"

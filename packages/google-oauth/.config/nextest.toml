@@ -1,0 +1,20 @@
+[profile.default]
+# Number of tests to run simultaneously
+test-threads = 4
+
+# Show detailed output for tests
+status-level = "all"
+success-output = "immediate-final"
+failure-output = "immediate-final"
+
+# Test timeout
+slow-timeout = "30s"
+timeout = "60s"
+
+# Show test output
+show-output = "immediate-final"
+
+[profile.ci]
+# For CI environments
+test-threads = 2
+timeout = "120s"
