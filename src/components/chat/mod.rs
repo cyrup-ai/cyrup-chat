@@ -16,6 +16,7 @@ pub struct ChatMessage {
     pub reply_to_author: Option<String>,    // Parent author name (for display)
     pub pinned: bool,                       // Pin to top of conversation (max 5)
     pub reactions: Vec<ReactionSummary>,    // Aggregated reaction data for display
+    pub unread: bool,                       // Unread status for notification tracking
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -65,6 +66,7 @@ impl ChatMessage {
             reply_to_author: None,  // Will be populated when loading thread context
             pinned: msg.pinned,
             reactions: Vec::new(),  // Populated separately via LIVE QUERY
+            unread: msg.unread,
         }
     }
 
@@ -79,6 +81,7 @@ impl ChatMessage {
             reply_to_author: None,
             pinned: false,
             reactions: Vec::new(),
+            unread: false,
         }
     }
 
@@ -93,6 +96,7 @@ impl ChatMessage {
             reply_to_author: None,
             pinned: false,
             reactions: Vec::new(),
+            unread: false,
         }
     }
 }

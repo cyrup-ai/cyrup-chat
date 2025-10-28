@@ -109,6 +109,13 @@ pub fn ChatComponent() -> Element {
                 match database.get_conversation(&current_id).await {
                     Ok(_) => {
                         log::debug!("[Chat] Conversation exists: {}", current_id);
+                        
+                        // Mark all messages in this conversation as read
+                        if let Err(e) = database.mark_messages_read(&current_id).await {
+                            log::error!("[Chat] Failed to mark messages read: {}", e);
+                        } else {
+                            log::debug!("[Chat] Marked messages read for: {}", current_id);
+                        }
                     }
                     Err(_) => {
                         // Conversation doesn't exist - create it
@@ -638,6 +645,21 @@ fn ChatMessageView(
     rsx! {
         div {
             class: "group relative flex flex-col px-5 py-4 rounded-xl max-w-[70%] animate-[slideIn_0.3s_ease-out] {sender_classes} {indent_class}",
+            
+            // Unread indicator dot
+            if message.unread {
+                div {
+                    class: "absolute top-2 left-2 flex items-center gap-2 z-10",
+                    div {
+                        class: "w-2 h-2 bg-blue-500 rounded-full animate-pulse",
+                        title: "Unread message"
+                    }
+                    span {
+                        class: "text-xs text-blue-400 font-semibold",
+                        "NEW"
+                    }
+                }
+            }
             
             // Pin and Reaction buttons (visible on hover)
             div {
