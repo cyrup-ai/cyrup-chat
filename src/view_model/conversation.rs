@@ -111,6 +111,19 @@ pub struct Room {
     pub created_at: DateTime<Utc>,
 }
 
+/// Lightweight room summary for list views
+///
+/// Mirrors ConversationSummary pattern but for multi-agent rooms.
+/// Used in RoomListProvider to display room history without loading full messages.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RoomSummary {
+    pub id: RoomId,
+    pub title: String,
+    pub participants: Vec<AgentTemplateId>,  // Multi-agent participant list
+    pub last_message_preview: String,
+    pub last_message_timestamp: DateTime<Utc>,
+}
+
 impl Default for Conversation {
     fn default() -> Self {
         let now = chrono::Utc::now();

@@ -1,4 +1,4 @@
-use super::{ChatMessage, MessageSender};
+use super::{ChatMessage, MessageSender, ReactionSummary};
 use crate::constants::ui_text;
 use crate::environment::Environment;
 use crate::services::agent_chat;
@@ -8,6 +8,7 @@ use crate::view_model::conversation::{Conversation, ConversationId};
 use crate::widgets::ErrorBox;
 use dioxus::prelude::*;
 use futures_util::StreamExt;
+use std::collections::HashSet;
 use surrealdb::Notification;
 use surrealdb_types::Action;
 
@@ -92,6 +93,9 @@ pub fn ChatComponent() -> Element {
     
     // Reply state tracking
     let mut replying_to = use_signal(|| Option::<(String, String)>::None);
+    
+    // Bookmark state tracking
+    let bookmarked_msg_ids = use_signal(|| HashSet::<String>::new());
 
     // Bootstrap conversation on mount - ensure selected conversation exists
     use_effect({
@@ -165,10 +169,38 @@ pub fn ChatComponent() -> Element {
                 log::info!("[Chat] Loading existing messages for conversation: {}", current_id);
                 match database.get_all_messages(&current_id).await {
                     Ok(db_messages) => {
-                        let chat_messages: Vec<ChatMessage> = db_messages
+                        let mut chat_messages: Vec<ChatMessage> = db_messages
                             .into_iter()
                             .map(ChatMessage::from_db_message)
                             .collect();
+                        
+                        // Load reactions for each message
+                        for msg in chat_messages.iter_mut() {
+                            match database.get_reaction_counts(&msg.id).await {
+                                Ok(counts) => {
+                                    let full_reactions = database.get_message_reactions(&msg.id).await
+                                        .unwrap_or_default();
+                                    
+                                    let user_id = "hardcoded-david-maple";
+                                    
+                                    msg.reactions = counts.into_iter()
+                                        .map(|(emoji, count)| {
+                                            let user_reacted = full_reactions.iter()
+                                                .any(|r| r.emoji == emoji && r.user_id == user_id);
+                                            ReactionSummary {
+                                                emoji,
+                                                count,
+                                                user_reacted,
+                                            }
+                                        })
+                                        .collect();
+                                }
+                                Err(e) => {
+                                    log::error!("[Chat] Failed to load reactions for message {}: {}", msg.id, e);
+                                }
+                            }
+                        }
+                        
                         let count = chat_messages.len();
                         messages.set(chat_messages);
                         log::info!("[Chat] Loaded {} existing messages", count);
@@ -255,6 +287,118 @@ pub fn ChatComponent() -> Element {
                 }
 
                 log::warn!("[Chat] LIVE QUERY stream ended");
+            });
+        }
+    });
+
+    // Subscribe to LIVE QUERY for reaction updates
+    use_effect({
+        let database = environment.database.clone();
+        let mut messages = messages;
+        let conversation_id = conversation_id;
+        move || {
+            let database = database.clone();
+            let current_id = conversation_id.read().clone();
+            spawn(async move {
+                log::info!("[Chat] Starting reaction LIVE QUERY subscription");
+                
+                // Start LIVE QUERY for reactions
+                let stream_result = database
+                    .client()
+                    .query("LIVE SELECT * FROM reaction WHERE message_id IN (SELECT id FROM message WHERE conversation_id = $conv_id)")
+                    .bind(("conv_id", current_id.clone()))
+                    .await;
+                
+                let mut stream = match stream_result {
+                    Ok(mut response) => {
+                        match response.stream::<Notification<crate::database::reactions::Reaction>>(0) {
+                            Ok(s) => s,
+                            Err(e) => {
+                                log::error!("[Chat] Failed to create reaction stream: {}", e);
+                                return;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("[Chat] Failed to start reaction LIVE QUERY: {}", e);
+                        return;
+                    }
+                };
+                
+                log::info!("[Chat] Reaction LIVE QUERY subscription active");
+                
+                // Consume notifications
+                while let Some(notification) = stream.next().await {
+                    match notification {
+                        Ok(notif) => {
+                            let reaction = notif.data;
+                            let message_id = reaction.message_id.clone();
+                            
+                            // Reload reactions for this message
+                            match database.get_reaction_counts(&message_id).await {
+                                Ok(counts) => {
+                                    // Get full reactions to check user participation
+                                    let full_reactions = database.get_message_reactions(&message_id).await
+                                        .unwrap_or_default();
+                                    
+                                    let user_id = "hardcoded-david-maple";
+                                    
+                                    // Convert to ReactionSummary
+                                    let reaction_summaries: Vec<ReactionSummary> = counts.into_iter()
+                                        .map(|(emoji, count)| {
+                                            let user_reacted = full_reactions.iter()
+                                                .any(|r| r.emoji == emoji && r.user_id == user_id);
+                                            ReactionSummary {
+                                                emoji,
+                                                count,
+                                                user_reacted,
+                                            }
+                                        })
+                                        .collect();
+                                    
+                                    // Update the message in the messages list
+                                    let mut msgs = messages.write();
+                                    if let Some(msg) = msgs.iter_mut().find(|m| m.id == message_id) {
+                                        msg.reactions = reaction_summaries;
+                                    }
+                                }
+                                Err(e) => {
+                                    log::error!("[Chat] Failed to reload reaction counts: {}", e);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("[Chat] Reaction LIVE QUERY notification error: {}", e);
+                        }
+                    }
+                }
+                
+                log::warn!("[Chat] Reaction LIVE QUERY stream ended");
+            });
+        }
+    });
+
+    // Load bookmarked message IDs on mount
+    use_effect({
+        let database = environment.database.clone();
+        let mut bookmarked_msg_ids = bookmarked_msg_ids;
+        move || {
+            let database = database.clone();
+            spawn(async move {
+                let user_id = "hardcoded-david-maple";
+                match database.get_bookmarked_messages(user_id).await {
+                    Ok(messages) => {
+                        let ids: HashSet<String> = messages
+                            .into_iter()
+                            .map(|msg| msg.id.0)
+                            .collect();
+                        bookmarked_msg_ids.set(ids);
+                        log::debug!("[Chat] Loaded {} bookmarked messages", bookmarked_msg_ids.read().len());
+                    }
+                    Err(e) => {
+                        log::error!("[Chat] Failed to load bookmarks: {}", e);
+                    }
+                }
             });
         }
     });
@@ -366,7 +510,8 @@ pub fn ChatComponent() -> Element {
                 for message in messages.read().iter() {
                     ChatMessageView { 
                         message: message.clone(),
-                        on_reply: start_reply
+                        on_reply: start_reply,
+                        bookmarked_msg_ids: bookmarked_msg_ids
                     }
                 }
                 if *is_sending.read() {
@@ -437,10 +582,15 @@ pub fn ChatComponent() -> Element {
 #[component]
 fn ChatMessageView(
     message: ChatMessage, 
-    on_reply: EventHandler<(String, String)>
+    on_reply: EventHandler<(String, String)>,
+    bookmarked_msg_ids: Signal<HashSet<String>>
 ) -> Element {
     let environment = use_context::<Environment>();
     let model = environment.model.clone();
+    let database = environment.database.clone();
+    
+    // State for emoji picker
+    let mut show_emoji_picker = use_signal(|| false);
     
     let (sender_classes, sender_name, sender_icon) = match message.sender {
         MessageSender::User => (
@@ -474,16 +624,24 @@ fn ChatMessageView(
     // Clone fields before closures to avoid ownership conflict
     let message_id_for_pin = message.id.clone();
     let message_pinned = message.pinned;
+    let message_id_for_bookmark = message.id.clone();
+    let message_is_bookmarked = bookmarked_msg_ids.read().contains(&message.id);
     let message_id_for_reply = message.id.clone();
     let message_sender = message.sender.clone();
+    let message_id_for_emoji_picker = message.id.clone();
+    let database_for_emoji_picker = database.clone();
+    let message_id_for_reactions = message.id.clone();
+    let database_for_reactions = database.clone();
+    let database_for_bookmark = database.clone();
+    let bookmarked_msg_ids_for_button = bookmarked_msg_ids;
 
     rsx! {
         div {
             class: "group relative flex flex-col px-5 py-4 rounded-xl max-w-[70%] animate-[slideIn_0.3s_ease-out] {sender_classes} {indent_class}",
             
-            // Pin button (visible on hover)
+            // Pin and Reaction buttons (visible on hover)
             div {
-                class: "absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200",
+                class: "absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex gap-2",
                 button {
                     class: if message_pinned {
                         "px-2 py-1 bg-gradient-to-br from-[#0078ff]/30 to-[#00a8ff]/30 border border-[#00a8ff]/50 rounded text-white cursor-pointer transition-all duration-200 hover:from-[#0078ff]/40 hover:to-[#00a8ff]/40"
@@ -506,6 +664,56 @@ fn ChatMessageView(
                         });
                     },
                     "📌"
+                }
+                button {
+                    class: if message_is_bookmarked {
+                        "px-2 py-1 bg-gradient-to-br from-[#0078ff]/30 to-[#00a8ff]/30 border border-[#00a8ff]/50 rounded text-white cursor-pointer transition-all duration-200 hover:from-[#0078ff]/40 hover:to-[#00a8ff]/40"
+                    } else {
+                        "px-2 py-1 bg-white/5 border border-white/10 rounded text-white/50 cursor-pointer transition-all duration-200 hover:bg-white/10 hover:border-white/20 hover:text-white"
+                    },
+                    onclick: move |_| {
+                        let message_id = message_id_for_bookmark.clone();
+                        let database = database_for_bookmark.clone();
+                        let is_bookmarked = message_is_bookmarked;
+                        let mut bookmarked_ids = bookmarked_msg_ids_for_button;
+                        spawn(async move {
+                            let user_id = "hardcoded-david-maple";
+                            let result = if is_bookmarked {
+                                database.unbookmark_message(user_id, &message_id).await
+                            } else {
+                                database.bookmark_message(user_id, &message_id).await.map(|_| ())
+                            };
+                            
+                            match result {
+                                Ok(_) => {
+                                    // Update the local state
+                                    let mut ids = bookmarked_ids.read().clone();
+                                    if is_bookmarked {
+                                        ids.remove(&message_id);
+                                    } else {
+                                        ids.insert(message_id.clone());
+                                    }
+                                    bookmarked_ids.set(ids);
+                                }
+                                Err(e) => {
+                                    log::error!("Failed to toggle bookmark: {}", e);
+                                }
+                            }
+                        });
+                    },
+                    dangerous_inner_html: if message_is_bookmarked {
+                        crate::icons::ICON_BOOKMARK2
+                    } else {
+                        crate::icons::ICON_BOOKMARK1
+                    }
+                }
+                button {
+                    class: "px-2 py-1 bg-white/5 border border-white/10 rounded text-white/70 cursor-pointer transition-all duration-200 hover:bg-white/10 hover:border-white/20 hover:text-white",
+                    onclick: move |_| {
+                        let current = *show_emoji_picker.read();
+                        show_emoji_picker.set(!current);
+                    },
+                    "😊"
                 }
             }
             
@@ -532,6 +740,110 @@ fn ChatMessageView(
             div {
                 class: "text-[var(--g-labelColor)] leading-relaxed whitespace-pre-wrap",
                 "{message.content}"
+            }
+            
+            // Emoji picker (conditional render)
+            if *show_emoji_picker.read() {
+                div {
+                    class: "mt-2 p-3 bg-gradient-to-br from-[#1a1a2e]/95 to-[#16213e]/95 border border-white/20 rounded-lg shadow-xl backdrop-blur-sm",
+                    div {
+                        class: "grid grid-cols-5 gap-2",
+                        for emoji in ["👍", "❤️", "😂", "🎯", "✅", "🔥", "👏", "🙌"] {
+                            {
+                                let emoji_str = emoji.to_string();
+                                let message_id = message_id_for_emoji_picker.clone();
+                                let database = database_for_emoji_picker.clone();
+                                
+                                rsx! {
+                                    button {
+                                        class: "text-2xl hover:scale-125 transition-transform cursor-pointer p-2 hover:bg-white/10 rounded",
+                                        onclick: move |_| {
+                                            let emoji_str = emoji_str.clone();
+                                            let message_id = message_id.clone();
+                                            let database = database.clone();
+                                    
+                                    spawn(async move {
+                                        let user_id = "hardcoded-david-maple";
+                                        
+                                        // Check if user already reacted with this emoji
+                                        let reactions = database.get_message_reactions(&message_id).await
+                                            .unwrap_or_default();
+                                        
+                                        let already_reacted = reactions.iter()
+                                            .any(|r| r.user_id == user_id && r.emoji == emoji_str);
+                                        
+                                        if already_reacted {
+                                            // Remove reaction
+                                            if let Err(e) = database.remove_reaction(&message_id, user_id, &emoji_str).await {
+                                                log::error!("Failed to remove reaction: {}", e);
+                                            }
+                                        } else {
+                                            // Add reaction
+                                            if let Err(e) = database.add_reaction(&message_id, user_id, &emoji_str).await {
+                                                log::error!("Failed to add reaction: {}", e);
+                                            }
+                                        }
+                                    });
+                                            
+                                            // Close picker after selection
+                                            show_emoji_picker.set(false);
+                                        },
+                                        "{emoji_str}"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Reaction display
+            if !message.reactions.is_empty() {
+                div {
+                    class: "flex flex-wrap gap-2 mt-3",
+                    for reaction in message.reactions.iter() {
+                        {
+                            let emoji_str = reaction.emoji.clone();
+                            let count = reaction.count;
+                            let user_reacted = reaction.user_reacted;
+                            let message_id = message_id_for_reactions.clone();
+                            let database = database_for_reactions.clone();
+                            
+                            rsx! {
+                                button {
+                                    class: if user_reacted {
+                                        "px-3 py-1 bg-gradient-to-br from-[#0078ff]/30 to-[#00a8ff]/30 border border-[#00a8ff]/50 rounded-full text-sm flex items-center gap-1 cursor-pointer transition-all duration-200 hover:from-[#0078ff]/40 hover:to-[#00a8ff]/40"
+                                    } else {
+                                        "px-3 py-1 bg-white/5 border border-white/10 rounded-full text-sm flex items-center gap-1 cursor-pointer transition-all duration-200 hover:bg-white/10 hover:border-white/20"
+                                    },
+                                    onclick: move |_| {
+                                        let emoji_str = emoji_str.clone();
+                                        let message_id = message_id.clone();
+                                        let database = database.clone();
+                                        
+                                        spawn(async move {
+                                            let user_id = "hardcoded-david-maple";
+                                            
+                                            if user_reacted {
+                                                // Remove reaction
+                                                if let Err(e) = database.remove_reaction(&message_id, user_id, &emoji_str).await {
+                                                    log::error!("Failed to remove reaction: {}", e);
+                                                }
+                                            } else {
+                                                // Add reaction
+                                                if let Err(e) = database.add_reaction(&message_id, user_id, &emoji_str).await {
+                                                    log::error!("Failed to add reaction: {}", e);
+                                                }
+                                            }
+                                        });
+                                    },
+                                    span { class: "text-base", "{emoji_str}" }
+                                    span { class: "text-xs text-white/70", "{count}" }
+                                }
+                            }
+                        }
+                    }
+                }
             }
             
             // Reply button (only show for User and Cyrup messages)

@@ -7,8 +7,17 @@ use crate::environment::Environment;
 use chrono::{DateTime, Local, Utc};
 use dioxus::prelude::*;
 
+#[derive(Clone, Copy, PartialEq)]
+enum ViewMode {
+    Chat,
+    Bookmarks,
+}
+
 #[component]
 pub fn MainView(auth_state: AuthState) -> Element {
+    let view_mode = use_signal(|| ViewMode::Chat);
+    use_context_provider(|| view_mode);
+    
     rsx! {
         div {
             class: "flex h-screen bg-gradient-to-br from-[#1a1a2e]/80 via-[#16213e]/80 to-[#0f0f1e]/80 bg-[length:400%_400%] animate-[gradientShift_45s_ease-in-out_infinite] relative",
@@ -17,7 +26,12 @@ pub fn MainView(auth_state: AuthState) -> Element {
             }
             div {
                 class: "flex-1",
-                ChatComponent {}
+                match *view_mode.read() {
+                    ViewMode::Chat => rsx! { ChatComponent {} },
+                    ViewMode::Bookmarks => rsx! { 
+                        crate::components::bookmarks::BookmarksView {}
+                    }
+                }
             }
         }
     }
@@ -103,6 +117,9 @@ pub fn ChatHistorySidebar(auth_state: AuthState) -> Element {
                     "+ New Conversation"
                 }
             }
+
+            // Navigation section
+            NavigationSection {}
 
             // Conversation list
             div {
@@ -223,4 +240,82 @@ async fn create_new_conversation(
     selected_conversation_id.set(new_id);
 
     Ok(())
+}
+
+/// Navigation section component for switching between Chat and Bookmarks views
+#[component]
+fn NavigationSection() -> Element {
+    let environment = use_context::<Environment>();
+    let mut view_mode = use_context::<Signal<ViewMode>>();
+    
+    // Load bookmark count
+    let bookmark_count = use_resource(move || {
+        let database = environment.database.clone();
+        async move {
+            let user_id = "hardcoded-david-maple";
+            match database.get_bookmarked_messages(user_id).await {
+                Ok(messages) => Some(messages.len()),
+                Err(e) => {
+                    log::error!("[Navigation] Failed to load bookmark count: {}", e);
+                    None
+                }
+            }
+        }
+    });
+    
+    let current_view = *view_mode.read();
+    
+    rsx! {
+        div {
+            class: "p-4 border-b border-white/5 space-y-2",
+            
+            // Chat button
+            button {
+                class: if current_view == ViewMode::Chat {
+                    "w-full flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer bg-white/10 border border-white/20 transition-all duration-200"
+                } else {
+                    "w-full flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer transition-all duration-200 hover:bg-white/8"
+                },
+                onclick: move |_| {
+                    view_mode.set(ViewMode::Chat);
+                },
+                div {
+                    class: "text-xl",
+                    "💬"
+                }
+                span {
+                    class: "text-sm font-medium text-[var(--g-labelColor)]",
+                    "Conversations"
+                }
+            }
+            
+            // Bookmarks button
+            button {
+                class: if current_view == ViewMode::Bookmarks {
+                    "w-full flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer bg-white/10 border border-white/20 transition-all duration-200"
+                } else {
+                    "w-full flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer transition-all duration-200 hover:bg-white/8"
+                },
+                onclick: move |_| {
+                    view_mode.set(ViewMode::Bookmarks);
+                },
+                div {
+                    class: "text-base",
+                    dangerous_inner_html: crate::icons::ICON_BOOKMARK2
+                }
+                span {
+                    class: "text-sm font-medium text-[var(--g-labelColor)]",
+                    "Bookmarks"
+                }
+                if let Some(Some(count)) = bookmark_count.read().as_ref() {
+                    if *count > 0 {
+                        span {
+                            class: "ml-auto px-2 py-0.5 rounded-full bg-white/10 text-xs text-[var(--g-labelColor)]",
+                            "{count}"
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

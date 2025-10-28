@@ -14,6 +14,7 @@ pub enum UiTab {
     Timeline,
     Mentions,
     Messages,
+    Rooms,
     More,
 }
 
@@ -28,6 +29,10 @@ impl UiTab {
 
     pub fn is_messages(&self) -> bool {
         matches!(self, UiTab::Messages)
+    }
+
+    pub fn is_rooms(&self) -> bool {
+        matches!(self, UiTab::Rooms)
     }
 
     pub fn is_more(&self) -> bool {
@@ -56,6 +61,7 @@ pub struct Data {
     pub bookmarks: Vec<StatusViewModel>,
     pub favorites: Vec<StatusViewModel>,
     pub conversation_list: Vec<StatusViewModel>,
+    pub room_list: Vec<StatusViewModel>,
 
     pub local_timeline: Vec<StatusViewModel>,
     pub public_timeline: Vec<StatusViewModel>,
@@ -121,6 +127,7 @@ impl Default for Data {
             bookmarks: Default::default(),
             favorites: Default::default(),
             conversation_list: Default::default(),
+            room_list: Default::default(),
             local_timeline: Default::default(),
             public_timeline: Default::default(),
             classic_timeline: Default::default(),

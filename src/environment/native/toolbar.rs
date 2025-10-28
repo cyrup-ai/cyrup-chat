@@ -14,5 +14,6 @@ pub enum ToolbarSelection {
     Timeline = 0,
     Notifications = 1,
     Messages = 2,
-    More = 3,
+    Rooms = 3,
+    More = 4,
 }

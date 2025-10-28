@@ -7,6 +7,9 @@ pub use bookmarks::BookmarkTimelineProvider;
 mod conversation_list;
 pub use conversation_list::ConversationListProvider;
 
+mod room_list;
+pub use room_list::RoomListProvider;
+
 use std::pin::Pin;
 
 use futures_util::Future;

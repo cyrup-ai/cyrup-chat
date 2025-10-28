@@ -75,6 +75,7 @@ fn tab_index(tab: &UiTab) -> ToolbarSelection {
         UiTab::Timeline => ToolbarSelection::Timeline,
         UiTab::Mentions => ToolbarSelection::Notifications,
         UiTab::Messages => ToolbarSelection::Messages,
+        UiTab::Rooms => ToolbarSelection::Rooms,
         UiTab::More => ToolbarSelection::More,
     }
 }

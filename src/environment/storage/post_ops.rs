@@ -60,6 +60,29 @@ impl Data {
         }
     }
 
+    /// Merge room list updates into storage
+    ///
+    /// Handles both full reloads and incremental updates.
+    pub fn merge_room_list(&mut self, rooms: Vec<StatusViewModel>, is_reload: bool) {
+        if is_reload {
+            // Full reload: replace entire list
+            self.room_list = rooms;
+        } else {
+            // Incremental: merge avoiding duplicates by ID
+            let existing: HashSet<_> = self
+                .room_list
+                .iter()
+                .map(|r| r.id.0.clone())
+                .collect();
+
+            for room in rooms {
+                if !existing.contains(&room.id.0) {
+                    self.room_list.push(room);
+                }
+            }
+        }
+    }
+
     pub fn mutate_post(
         &mut self,
         id: StatusId,

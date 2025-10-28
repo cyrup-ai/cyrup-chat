@@ -10,6 +10,7 @@ use crate::database::Database;
 use crate::view_model::conversation::ConversationId;
 use crate::view_model::message::{AuthorType, Message, MessageId, MessageType};
 use flume::{Receiver, Sender, unbounded};
+use futures_util::stream::{FuturesUnordered, StreamExt};  // For concurrent agent execution
 use kodegen_tools_claude_agent::{
     ClaudeAgentOptions, ClaudeSDKClient, ContentBlock, Message as AgentMessage, SystemPrompt,
 };
@@ -117,6 +118,137 @@ pub async fn send_chat_message(
 
     // 5. Stream responses
     stream_agent_responses(client, database, conversation_id, user_msg_id).await
+}
+
+/// Send message to multiple agents concurrently (multi-agent room routing)
+///
+/// # Arguments
+/// * `database` - Database connection
+/// * `room_id` - Room ID (used as conversation_id for messages)
+/// * `user_message` - User message content (may contain @mentions)
+/// * `mentioned_agents` - Agent template IDs to route message to (from mention_parser)
+///
+/// # Returns
+/// * `Ok(())` - All agent responses streamed successfully
+/// * `Err(String)` - Error if user message save fails (agent errors logged but don't fail)
+///
+/// # Architecture
+/// 1. Save user message to database (conversation_id = room_id)
+/// 2. Spawn concurrent agent tasks using FuturesUnordered
+/// 3. Each agent:
+///    - Loads template (model, system_prompt, max_turns)
+///    - Creates fresh ClaudeSDKClient (no resume)
+///    - Streams responses using stream_agent_responses()
+/// 4. All agents run concurrently, responses appear in room timeline
+///
+/// # Streaming Pattern
+/// - Uses existing stream_agent_responses() helper (lines 127-250)
+/// - Debouncing: 100ms interval OR 50 chars (lines 135-136)
+/// - LIVE QUERY: Database updates trigger UI refresh automatically
+///
+/// # Error Handling
+/// - User message save failure → return Err (critical)
+/// - Individual agent failures → log error, continue with other agents (non-critical)
+pub async fn send_room_message(
+    database: Arc<Database>,
+    room_id: String,
+    user_message: String,
+    mentioned_agents: Vec<String>,  // Agent template IDs from @mentions
+) -> Result<(), String> {
+    log::info!(
+        "[RoomChat] Sending message to room {} with {} mentioned agents",
+        room_id,
+        mentioned_agents.len()
+    );
+
+    // 1. Save user message to database
+    // Note: Rooms use same message table as conversations (conversation_id field)
+    let user_msg = Message {
+        id: MessageId::default(),  // DB generates actual ID
+        conversation_id: ConversationId(room_id.clone()),
+        author: "User".to_string(),
+        author_type: AuthorType::Human,
+        content: user_message.clone(),
+        timestamp: chrono::Utc::now(),
+        in_reply_to: None,
+        message_type: MessageType::Normal,
+        attachments: Vec::new(),
+        unread: false,  // User's own messages start as read
+        deleted: false,
+        pinned: false,
+    };
+
+    let user_msg_id = database
+        .insert_message(&user_msg)
+        .await
+        .map_err(|e| format!("Failed to save user message: {}", e))?;
+
+    log::debug!("[RoomChat] Saved user message: {}", user_msg_id);
+
+    // 2. Spawn concurrent agent tasks
+    let mut agent_tasks = FuturesUnordered::new();
+
+    for agent_id in mentioned_agents {
+        let database = database.clone();
+        let room_id = room_id.clone();
+        let user_message = user_message.clone();
+        let user_msg_id = user_msg_id.clone();
+
+        agent_tasks.push(async move {
+            log::info!("[RoomChat] Spawning agent: {}", agent_id);
+
+            // Get agent template (model, system_prompt, max_turns)
+            let template = database.get_template(&agent_id).await?;
+
+            // Create fresh ClaudeSDKClient for this agent
+            let options = ClaudeAgentOptions {
+                model: Some(template.model.to_string().to_lowercase()),
+                system_prompt: Some(SystemPrompt::String(template.system_prompt.clone())),
+                max_turns: Some(template.max_turns),
+                // Enable core development tools
+                allowed_tools: vec![
+                    "Read".into(),
+                    "Write".into(),
+                    "Edit".into(),
+                    "Bash".into(),
+                    "Glob".into(),
+                    "Grep".into(),
+                    "Task".into(),
+                    "WebFetch".into(),
+                    "WebSearch".into(),
+                ],
+                resume: None,  // Fresh session for each room message (no state retention)
+                ..Default::default()
+            };
+
+            let mut client = ClaudeSDKClient::new(options, None)
+                .await
+                .map_err(|e| format!("Failed to create Claude client for {}: {}", agent_id, e))?;
+
+            log::debug!("[RoomChat] Sending message to agent {}", agent_id);
+
+            // Send message to agent
+            client
+                .send_message(&user_message)
+                .await
+                .map_err(|e| format!("Failed to send to agent {}: {}", agent_id, e))?;
+
+            // Stream responses using existing helper
+            // This handles: INSERT first chunk → UPDATE subsequent chunks → LIVE QUERY
+            stream_agent_responses(client, database, room_id, user_msg_id).await
+        });
+    }
+
+    // 3. Wait for all agents to complete (concurrent execution)
+    while let Some(result) = agent_tasks.next().await {
+        if let Err(e) = result {
+            // Log error but continue with other agents
+            log::error!("[RoomChat] Agent error: {}", e);
+        }
+    }
+
+    log::info!("[RoomChat] All agents completed");
+    Ok(())
 }
 
 /// Stream agent responses and update database

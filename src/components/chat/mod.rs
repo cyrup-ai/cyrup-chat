@@ -1,5 +1,8 @@
 mod view;
+pub mod mention_input;
+
 pub use view::ChatComponent;
+pub use mention_input::MentionInput;
 
 use chrono::{DateTime, Local};
 
@@ -12,6 +15,7 @@ pub struct ChatMessage {
     pub in_reply_to: Option<String>,        // Parent message ID
     pub reply_to_author: Option<String>,    // Parent author name (for display)
     pub pinned: bool,                       // Pin to top of conversation (max 5)
+    pub reactions: Vec<ReactionSummary>,    // Aggregated reaction data for display
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -20,6 +24,14 @@ pub enum MessageSender {
     Cyrup,
     System,
     Tool,
+}
+
+/// Aggregated reaction data for display
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReactionSummary {
+    pub emoji: String,
+    pub count: u32,
+    pub user_reacted: bool, // Did current user react with this emoji?
 }
 
 impl ChatMessage {
@@ -52,6 +64,7 @@ impl ChatMessage {
             in_reply_to: msg.in_reply_to.as_ref().map(|id| id.0.clone()),
             reply_to_author: None,  // Will be populated when loading thread context
             pinned: msg.pinned,
+            reactions: Vec::new(),  // Populated separately via LIVE QUERY
         }
     }
 
@@ -65,6 +78,7 @@ impl ChatMessage {
             in_reply_to: None,
             reply_to_author: None,
             pinned: false,
+            reactions: Vec::new(),
         }
     }
 
@@ -78,6 +92,7 @@ impl ChatMessage {
             in_reply_to: None,
             reply_to_author: None,
             pinned: false,
+            reactions: Vec::new(),
         }
     }
 }

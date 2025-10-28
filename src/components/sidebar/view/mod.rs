@@ -49,6 +49,12 @@ pub fn SidebarComponent(store: SidebarSignal) -> Element {
             has_messages,
         ),
         TabBarItem::new(
+            UiTab::Rooms,
+            crate::loc!("Rooms").to_string(),
+            tab.is_rooms(),
+            false,  // TODO: Add unread room indicator in future
+        ),
+        TabBarItem::new(
             UiTab::More,
             crate::loc!("More").to_string(),
             tab.is_more(),
@@ -109,6 +115,21 @@ pub fn SidebarComponent(store: SidebarSignal) -> Element {
                         store: use_signal(|| State::new(RootTimelineKind::ConversationList(account.clone())))
                     })
                 } else if tabs.get(3).is_some_and(|t| tab == t.id) {
+                    // Rooms tab - show room list using Stack + RoomListProvider
+                    let store_read = store.read();
+                    let Some(account) = store_read.selected_account.as_ref() else {
+                        return rsx!(div {
+                            class: "flex flex-row relative p-3 m-3 flex-grow self-center text-gray-400",
+                            "Loading rooms..."
+                        });
+                    };
+
+                    use crate::components::component_stack::{Stack, State, RootTimelineKind};
+
+                    rsx!(Stack {
+                        store: use_signal(|| State::new(RootTimelineKind::RoomList(account.clone())))
+                    })
+                } else if tabs.get(4).is_some_and(|t| tab == t.id) {
                     rsx!(SidebarMoreComponent {
                         store: store
                     })

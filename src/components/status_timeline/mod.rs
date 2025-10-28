@@ -5,7 +5,7 @@ mod reducer;
 mod view;
 
 pub use providers::*;
-pub use reducer::State;
+pub use reducer::{State, Action, TimelineSignal, handle_action};
 #[allow(unused_imports)]
 pub use view::{TimelineComponent, TimelineContents};
 

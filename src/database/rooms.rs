@@ -4,7 +4,7 @@
 
 use super::Database;
 use crate::view_model::agent::AgentTemplateId;
-use crate::view_model::conversation::{Room, RoomId};
+use crate::view_model::conversation::{Room, RoomId, RoomSummary};
 use crate::view_model::message::MessageId;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -128,5 +128,69 @@ impl Database {
             .map_err(|e| format!("Failed to add agent to room: {}", e))?;
 
         Ok(())
+    }
+
+    /// List all rooms ordered by most recent activity
+    ///
+    /// # Returns
+    /// * `Ok(Vec<RoomSummary>)` - Rooms sorted by last_message_at DESC
+    /// * `Err(String)` - Query execution or parsing error
+    ///
+    /// # Database Operation
+    /// Uses SurrealDB graph traversal to:
+    /// 1. Traverse backwards from room via message.conversation_id link
+    /// 2. Find last non-deleted message for preview
+    /// 3. Order by activity (last_message_at DESC)
+    ///
+    /// # Pattern Source
+    /// Cloned from conversations.rs:123-169 list_conversations() method
+    pub async fn list_rooms(&self) -> Result<Vec<RoomSummary>, String> {
+        // SurrealDB graph traversal syntax: <-field<-table
+        // Reads as: "from room, traverse back through conversation_id field to message records"
+        let query = r"
+            SELECT 
+                id,
+                title,
+                participants,
+                (<-conversation_id<-message WHERE deleted = false ORDER BY timestamp DESC LIMIT 1)[0].content AS last_message_preview,
+                last_message_at AS last_message_timestamp
+            FROM room
+            ORDER BY last_message_at DESC
+        ";
+
+        let mut response = self
+            .client()
+            .query(query)
+            .await
+            .map_err(|e| format!("Failed to list rooms: {}", e))?;
+
+        // Define response struct matching SELECT fields
+        #[derive(Deserialize, SurrealValue)]
+        struct QueryResult {
+            id: String,
+            title: String,
+            participants: Vec<String>,  // Array<string> from database
+            last_message_preview: Option<String>,
+            last_message_timestamp: DateTime<Utc>,
+        }
+
+        let results: Vec<QueryResult> = response
+            .take(0)
+            .map_err(|e| format!("Failed to parse rooms: {}", e))?;
+
+        // Map database records to RoomSummary view models
+        Ok(results
+            .into_iter()
+            .map(|r| RoomSummary {
+                id: RoomId(r.id),
+                title: r.title,
+                // Convert Vec<String> → Vec<AgentTemplateId>
+                participants: r.participants.into_iter().map(AgentTemplateId).collect(),
+                last_message_preview: r
+                    .last_message_preview
+                    .unwrap_or_else(|| "No messages yet".to_string()),
+                last_message_timestamp: r.last_message_timestamp,
+            })
+            .collect())
     }
 }
