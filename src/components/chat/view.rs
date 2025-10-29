@@ -117,12 +117,14 @@ pub fn ChatComponent() -> Element {
     };
 
     // Bootstrap conversation on mount - ensure selected conversation exists
-    use_effect({
+    use_future({
         let database = environment.database.clone();
+        let conversation_id = conversation_id;
         move || {
             let database = database.clone();
-            let current_id = conversation_id.read().clone();
-            spawn(async move {
+            let mut conversation_id = conversation_id;
+            async move {
+                let current_id = conversation_id.read().clone();
                 // Check if selected conversation exists
                 match database.get_conversation(&current_id).await {
                     Ok(_) => {
@@ -148,10 +150,17 @@ pub fn ChatComponent() -> Element {
                             }
                         };
 
+                        // Generate unique ID if using default placeholder
+                        let new_conversation_id = if current_id == "conversation:default_chat" {
+                            format!("conversation:{}", uuid::Uuid::new_v4().to_string().replace("-", ""))
+                        } else {
+                            current_id.clone()
+                        };
+
                         // Create conversation
                         let now = chrono::Utc::now();
                         let conversation = Conversation {
-                            id: current_id.clone().into(),
+                            id: new_conversation_id.clone().into(),
                             title: "Chat with CYRUP".to_string(),
                             participants: vec![template_id.into()],
                             summary: "General conversation with AI assistant".to_string(),
@@ -164,6 +173,8 @@ pub fn ChatComponent() -> Element {
                         match database.create_conversation(&conversation).await {
                             Ok(id) => {
                                 log::info!("[Chat] Created conversation: {}", id);
+                                // Update the signal to match the actual created ID
+                                conversation_id.set(id);
                             }
                             Err(e) => {
                                 log::error!("[Chat] Failed to create conversation: {}", e);
@@ -171,7 +182,7 @@ pub fn ChatComponent() -> Element {
                         }
                     }
                 }
-            });
+            }
         }
     });
 
