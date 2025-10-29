@@ -107,7 +107,7 @@ fn message_to_status_for_bookmark(msg: &Message) -> Status {
     Status {
         id: msg.id.0.clone(),
         uri: String::new(),
-        created_at: msg.timestamp,
+        created_at: *msg.timestamp,
         account: Account {
             id: msg.conversation_id.0.clone(),
             username: msg.author.clone(),
@@ -120,7 +120,7 @@ fn message_to_status_for_bookmark(msg: &Message) -> Status {
             moved: None,
             suspended: None,
             limited: None,
-            created_at: msg.timestamp,
+            created_at: *msg.timestamp,
             followers_count: 0,
             following_count: 0,
             statuses_count: 0,

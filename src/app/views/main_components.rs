@@ -6,17 +6,89 @@ use crate::components::chat::ChatComponent;
 use crate::environment::Environment;
 use chrono::{DateTime, Local, Utc};
 use dioxus::prelude::*;
+use surrealdb_types::ToSql;
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum ViewMode {
     Chat,
     Bookmarks,
+    Timeline,
+    Notifications,
+    Rooms,
+    More,
+    Templates,
 }
 
 #[component]
 pub fn MainView(auth_state: AuthState) -> Element {
-    let view_mode = use_signal(|| ViewMode::Chat);
+    let mut view_mode = use_signal(|| ViewMode::Chat);
     use_context_provider(|| view_mode);
+    
+    let environment = use_context::<Environment>();
+    let dispatch = use_context::<Callback<AppAction>>();
+    
+    // Register menu event handler using channel for thread safety
+    let (menu_sender, menu_receiver) = use_signal(flume::unbounded::<crate::environment::types::AppEvent>)();
+    
+    // Set up menu event handler with thread-safe channel
+    let env_for_menu = environment.clone();
+    use_effect(move || {
+        use std::sync::Arc;
+        let sender_clone = menu_sender.clone();
+        env_for_menu.platform.handle_menu_events(Arc::new(move |event| {
+            let _ = sender_clone.send(event);
+        }));
+    });
+    
+    // Process menu events from channel
+    use_future(move || {
+        let receiver = menu_receiver.clone();
+        async move {
+            while let Ok(event) = receiver.recv_async().await {
+                use crate::environment::types::{AppEvent, MainMenuEvent};
+                
+                if let AppEvent::MenuEvent(menu_event) = event {
+                    log::debug!("[MainView] Received menu event: {:?}", menu_event);
+                    
+                    // Map menu events to view mode changes
+                    match menu_event {
+                        MainMenuEvent::Timeline => {
+                            view_mode.set(ViewMode::Timeline);
+                        }
+                        MainMenuEvent::Mentions => {
+                            view_mode.set(ViewMode::Notifications);
+                        }
+                        MainMenuEvent::Messages => {
+                            view_mode.set(ViewMode::Rooms);
+                        }
+                        MainMenuEvent::More => {
+                            view_mode.set(ViewMode::More);
+                        }
+                        MainMenuEvent::Logout => {
+                            dispatch(AppAction::LogoutRequested);
+                        }
+                        MainMenuEvent::NewPost => {
+                            log::warn!("[MainView] NewPost not yet implemented");
+                        }
+                        MainMenuEvent::Reload => {
+                            log::debug!("[MainView] Reload requested for current view");
+                        }
+                        _ => {
+                            log::debug!("[MainView] Unhandled menu event: {:?}", menu_event);
+                        }
+                    }
+                }
+            }
+        }
+    });
+    
+    // Update menu enabled state when logged in
+    use_effect(move || {
+        let env = environment.clone();
+        env.platform.update_menu(|config| {
+            config.logged_in = true; // MainView only renders when authenticated
+        });
+    });
     
     rsx! {
         div {
@@ -30,7 +102,22 @@ pub fn MainView(auth_state: AuthState) -> Element {
                     ViewMode::Chat => rsx! { ChatComponent {} },
                     ViewMode::Bookmarks => rsx! { 
                         crate::components::bookmarks::BookmarksView {}
-                    }
+                    },
+                    ViewMode::Timeline => rsx! {
+                        crate::app::views::TimelineView { auth_state: auth_state.clone() }
+                    },
+                    ViewMode::Notifications => rsx! {
+                        crate::app::views::NotificationsView {}
+                    },
+                    ViewMode::Rooms => rsx! {
+                        crate::app::views::RoomsView { auth_state: auth_state.clone() }
+                    },
+                    ViewMode::More => rsx! {
+                        crate::app::views::MoreView { auth_state: auth_state.clone() }
+                    },
+                    ViewMode::Templates => rsx! {
+                        crate::components::template_manager::TemplateManagerComponent {}
+                    },
                 }
             }
         }
@@ -62,13 +149,39 @@ pub fn ChatHistorySidebar(auth_state: AuthState) -> Element {
         async move { database.list_conversations().await }
     });
 
+    // Calculate total unread count across all conversations
+    let total_unread = use_memo(move || {
+        if let Some(Ok(convos)) = conversations.read().as_ref() {
+            convos.iter().map(|c| c.unread_count).sum::<u32>()
+        } else {
+            0
+        }
+    });
+
+    // Update window title when unread count changes
+    use_effect(move || {
+        let count = *total_unread.read();
+        
+        spawn(async move {
+            let title = if count > 0 {
+                format!("({}) CYRUP Chat", count)
+            } else {
+                "CYRUP Chat".to_string()
+            };
+            
+            let window = dioxus::desktop::window();
+            window.set_title(&title);
+            log::debug!("[App] Updated window title: {}", title);
+        });
+    });
+
     let handle_logout = move |_| {
         dispatch(AppAction::LogoutRequested);
     };
 
     rsx! {
         div {
-            class: "w-[280px] bg-gradient-to-b from-[#1a1a2e]/90 to-[#0f0f1e]/90 glass border-r border-white/10 flex flex-col shadow-lg",
+            class: "w-[280px] pt-16 bg-gradient-to-b from-[#1a1a2e]/90 to-[#0f0f1e]/90 glass border-r border-white/10 flex flex-col shadow-lg",
 
             // Header
             div {
@@ -133,7 +246,7 @@ pub fn ChatHistorySidebar(auth_state: AuthState) -> Element {
                             }
                         } else {
                             {convos.iter().map(|convo| {
-                                let convo_id = convo.id.0.clone();
+                                let convo_id = convo.id.0.to_sql();
                                 let is_selected = selected_conversation_id.read().as_str() == convo_id.as_str();
                                 let convo_id_for_click = convo_id.clone();
                                 let convo_key = convo_id.clone();
@@ -158,8 +271,18 @@ pub fn ChatHistorySidebar(auth_state: AuthState) -> Element {
                                             "{timestamp_str}"
                                         }
                                         div {
-                                            class: "text-[0.9em] text-[var(--g-labelColor)] whitespace-nowrap overflow-hidden text-ellipsis",
-                                            "{title_str}"
+                                            class: "text-[0.9em] text-[var(--g-labelColor)] whitespace-nowrap overflow-hidden text-ellipsis flex items-center justify-between",
+                                            span {
+                                                class: "flex-1",
+                                                "{title_str}"
+                                            }
+                                            // Add agent count badge for multi-agent conversations
+                                            if convo.participants.len() > 1 {
+                                                span {
+                                                    class: "text-xs text-white/50 ml-2 px-2 py-0.5 bg-white/10 rounded-full",
+                                                    "{convo.participants.len()} agents"
+                                                }
+                                            }
                                         }
                                         if unread > 0 {
                                             span {
@@ -215,34 +338,35 @@ async fn create_new_conversation(
     let template_id = templates
         .first()
         .map(|t| t.id.0.clone())
-        .unwrap_or_else(|| "template:default".to_string());
+        .unwrap_or_else(|| surrealdb_types::RecordId::new("agent_template", "default"));
 
     // Generate new conversation ID
-    let new_id = format!("conversation:{}", uuid::Uuid::new_v4());
+    let new_id_key = uuid::Uuid::new_v4().to_string();
+    let new_id = surrealdb_types::RecordId::new("conversation", new_id_key.as_str());
 
     // Create conversation
     let now = chrono::Utc::now();
     let conversation = Conversation {
         id: ConversationId(new_id.clone()),
         title: "New Conversation".to_string(),
-        template_id: AgentTemplateId(template_id),
+        participants: vec![AgentTemplateId(template_id)],
         summary: String::new(),
-        agent_session_id: None,
+        agent_sessions: std::collections::HashMap::new(),
         last_summarized_message_id: None,
-        last_message_at: now,
-        created_at: now,
+        last_message_at: now.into(),
+        created_at: now.into(),
     };
 
     db.create_conversation(&conversation).await?;
-    log::info!("[ChatHistory] Created new conversation: {}", new_id);
+    log::info!("[ChatHistory] Created new conversation: {}", new_id.to_sql());
 
     // Auto-select newly created conversation
-    selected_conversation_id.set(new_id);
+    selected_conversation_id.set(new_id.to_sql());
 
     Ok(())
 }
 
-/// Navigation section component for switching between Chat and Bookmarks views
+/// Navigation section component for switching between all views
 #[component]
 fn NavigationSection() -> Element {
     let environment = use_context::<Environment>();
@@ -265,57 +389,53 @@ fn NavigationSection() -> Element {
     
     let current_view = *view_mode.read();
     
-    rsx! {
-        div {
-            class: "p-4 border-b border-white/5 space-y-2",
-            
-            // Chat button
+    // Helper function to create nav button
+    let create_button = |label: &str, icon: &str, target: ViewMode, count: Option<usize>| {
+        let is_active = current_view == target;
+        rsx! {
             button {
-                class: if current_view == ViewMode::Chat {
+                key: "{label}",
+                class: if is_active {
                     "w-full flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer bg-white/10 border border-white/20 transition-all duration-200"
                 } else {
                     "w-full flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer transition-all duration-200 hover:bg-white/8"
                 },
                 onclick: move |_| {
-                    view_mode.set(ViewMode::Chat);
-                },
-                div {
-                    class: "text-xl",
-                    "💬"
-                }
-                span {
-                    class: "text-sm font-medium text-[var(--g-labelColor)]",
-                    "Conversations"
-                }
-            }
-            
-            // Bookmarks button
-            button {
-                class: if current_view == ViewMode::Bookmarks {
-                    "w-full flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer bg-white/10 border border-white/20 transition-all duration-200"
-                } else {
-                    "w-full flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer transition-all duration-200 hover:bg-white/8"
-                },
-                onclick: move |_| {
-                    view_mode.set(ViewMode::Bookmarks);
+                    view_mode.set(target);
                 },
                 div {
                     class: "text-base",
-                    dangerous_inner_html: crate::icons::ICON_BOOKMARK2
+                    dangerous_inner_html: icon
                 }
                 span {
                     class: "text-sm font-medium text-[var(--g-labelColor)]",
-                    "Bookmarks"
+                    "{label}"
                 }
-                if let Some(Some(count)) = bookmark_count.read().as_ref() {
-                    if *count > 0 {
+                if let Some(num) = count {
+                    if num > 0 {
                         span {
                             class: "ml-auto px-2 py-0.5 rounded-full bg-white/10 text-xs text-[var(--g-labelColor)]",
-                            "{count}"
+                            "{num}"
                         }
                     }
                 }
             }
+        }
+    };
+    
+    let bookmark_count_val = bookmark_count.read().as_ref().and_then(|c| *c);
+    
+    rsx! {
+        div {
+            class: "p-4 border-b border-white/5 space-y-2",
+            
+            {create_button("Conversations", "💬", ViewMode::Chat, None)}
+            {create_button("Timeline", crate::icons::ICON_HOME, ViewMode::Timeline, None)}
+            {create_button("Notifications", crate::icons::ICON_BELL, ViewMode::Notifications, None)}
+            {create_button("Rooms", crate::icons::ICON_ROOMS, ViewMode::Rooms, None)}
+            {create_button("Bookmarks", crate::icons::ICON_BOOKMARK2, ViewMode::Bookmarks, bookmark_count_val)}
+            {create_button("More", crate::icons::ICON_MORE, ViewMode::More, None)}
+            {create_button("Templates", crate::icons::ICON_OPTIONS, ViewMode::Templates, None)}
         }
     }
 }

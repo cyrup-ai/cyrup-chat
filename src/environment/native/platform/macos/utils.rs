@@ -61,7 +61,6 @@ pub fn format_datetime(datetime: &DateTime<Utc>) -> (String, String) {
 pub fn get_native_window_handle(window: &AppWindow) -> Result<*mut AnyObject, String> {
     window
         .get_native_window()
-        .map(|id| id as *mut AnyObject)
         .map_err(|e| format!("Failed to get native window handle: {}", e))
 }
 

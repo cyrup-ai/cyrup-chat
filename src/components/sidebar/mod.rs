@@ -1,5 +1,5 @@
 mod reducer;
-mod view;
+pub mod view;
 
-pub use reducer::{MoreSelection, SidebarState, handle_action};
+pub use reducer::{MoreSelection, SidebarAction, SidebarState, handle_action};
 pub use view::SidebarComponent;

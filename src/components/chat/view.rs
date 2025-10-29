@@ -1,7 +1,8 @@
 use super::{ChatMessage, MessageSender, ReactionSummary};
+use crate::components::chat::mention_input::MentionInput;
 use crate::constants::ui_text;
 use crate::environment::Environment;
-use crate::services::agent_chat;
+use crate::services::{agent_chat, mention_parser};
 use crate::view_model::agent::{AgentModel, AgentTemplate, AgentTemplateId};
 use crate::view_model::conversation::{Conversation, ConversationId};
 
@@ -10,7 +11,7 @@ use dioxus::prelude::*;
 use futures_util::StreamExt;
 use std::collections::HashSet;
 use surrealdb::Notification;
-use surrealdb_types::Action;
+use surrealdb_types::{Action, ToSql};
 
 #[component]
 fn PinnedBanner(conversation_id: String) -> Element {
@@ -85,7 +86,7 @@ pub fn ChatComponent() -> Element {
         }
     };
 
-    let messages = use_signal(Vec::<ChatMessage>::new);
+    let mut messages = use_signal(Vec::<ChatMessage>::new);
     let mut input_value = use_signal(String::new);
     let mut is_sending = use_signal(|| false);
     let mut send_error = use_signal(|| Option::<String>::None);
@@ -95,12 +96,29 @@ pub fn ChatComponent() -> Element {
     let mut replying_to = use_signal(|| Option::<(String, String)>::None);
     
     // Bookmark state tracking
-    let bookmarked_msg_ids = use_signal(|| HashSet::<String>::new());
+    let bookmarked_msg_ids = use_signal(HashSet::<String>::new);
+    
+    // Delete confirmation state tracking
+    let mut show_delete_confirmation = use_signal(|| Option::<String>::None);
+    
+    // Track whether we've scrolled to first unread (one-time per conversation open)
+    let mut has_scrolled_to_unread = use_signal(|| false);
+
+    // Load conversation to check participant count for conditional input rendering
+    let conversation_for_input = {
+        let database = environment.database.clone();
+        use_resource(move || {
+            let database = database.clone();
+            let conv_id = conversation_id.read().clone();
+            async move {
+                database.get_conversation(&conv_id).await.ok()
+            }
+        })
+    };
 
     // Bootstrap conversation on mount - ensure selected conversation exists
     use_effect({
         let database = environment.database.clone();
-        let conversation_id = conversation_id;
         move || {
             let database = database.clone();
             let current_id = conversation_id.read().clone();
@@ -135,12 +153,12 @@ pub fn ChatComponent() -> Element {
                         let conversation = Conversation {
                             id: ConversationId(current_id.clone()),
                             title: "Chat with CYRUP".to_string(),
-                            template_id: AgentTemplateId(template_id),
+                            participants: vec![AgentTemplateId(template_id)],
                             summary: "General conversation with AI assistant".to_string(),
-                            agent_session_id: None, // Lazy spawn on first message
+                            agent_sessions: std::collections::HashMap::new(), // Lazy spawn on first message
                             last_summarized_message_id: None,
-                            last_message_at: now,
-                            created_at: now,
+                            last_message_at: now.into(),
+                            created_at: now.into(),
                         };
 
                         match database.create_conversation(&conversation).await {
@@ -162,7 +180,6 @@ pub fn ChatComponent() -> Element {
     use_effect({
         let database = environment.database.clone();
         let mut messages = messages;
-        let conversation_id = conversation_id;
         move || {
             let database = database.clone();
             let current_id = conversation_id.read().clone();
@@ -176,38 +193,13 @@ pub fn ChatComponent() -> Element {
                 log::info!("[Chat] Loading existing messages for conversation: {}", current_id);
                 match database.get_all_messages(&current_id).await {
                     Ok(db_messages) => {
-                        let mut chat_messages: Vec<ChatMessage> = db_messages
+                        let chat_messages: Vec<ChatMessage> = db_messages
                             .into_iter()
                             .map(ChatMessage::from_db_message)
                             .collect();
-                        
-                        // Load reactions for each message
-                        for msg in chat_messages.iter_mut() {
-                            match database.get_reaction_counts(&msg.id).await {
-                                Ok(counts) => {
-                                    let full_reactions = database.get_message_reactions(&msg.id).await
-                                        .unwrap_or_default();
-                                    
-                                    let user_id = "hardcoded-david-maple";
-                                    
-                                    msg.reactions = counts.into_iter()
-                                        .map(|(emoji, count)| {
-                                            let user_reacted = full_reactions.iter()
-                                                .any(|r| r.emoji == emoji && r.user_id == user_id);
-                                            ReactionSummary {
-                                                emoji,
-                                                count,
-                                                user_reacted,
-                                            }
-                                        })
-                                        .collect();
-                                }
-                                Err(e) => {
-                                    log::error!("[Chat] Failed to load reactions for message {}: {}", msg.id, e);
-                                }
-                            }
-                        }
-                        
+
+                        // Display messages immediately without reactions
+                        // Reactions will be populated by LIVE QUERY subscription (line 321-410)
                         let count = chat_messages.len();
                         messages.set(chat_messages);
                         log::info!("[Chat] Loaded {} existing messages", count);
@@ -281,8 +273,9 @@ pub fn ChatComponent() -> Element {
                                 }
                                 Action::Delete => {
                                     // Message deleted - remove from list
-                                    log::debug!("[Chat] LIVE QUERY: Message deleted");
-                                    // For MVP, we don't implement delete UI
+                                    log::debug!("[Chat] LIVE QUERY: Message deleted - {}", message_data.id.0.to_sql());
+                                    let mut msgs = messages.write();
+                                    msgs.retain(|m| m.id != message_data.id.0);
                                 }
                                 _ => {}
                             }
@@ -302,18 +295,16 @@ pub fn ChatComponent() -> Element {
     use_effect({
         let database = environment.database.clone();
         let mut messages = messages;
-        let conversation_id = conversation_id;
+        let _conversation_id = conversation_id;
         move || {
             let database = database.clone();
-            let current_id = conversation_id.read().clone();
             spawn(async move {
-                log::info!("[Chat] Starting reaction LIVE QUERY subscription");
+                log::info!("[Chat] Starting reaction LIVE QUERY subscription (global, app-filtered)");
                 
                 // Start LIVE QUERY for reactions
                 let stream_result = database
                     .client()
-                    .query("LIVE SELECT * FROM reaction WHERE message_id IN (SELECT id FROM message WHERE conversation_id = $conv_id)")
-                    .bind(("conv_id", current_id.clone()))
+                    .query("LIVE SELECT * FROM reaction")
                     .await;
                 
                 let mut stream = match stream_result {
@@ -332,7 +323,7 @@ pub fn ChatComponent() -> Element {
                     }
                 };
                 
-                log::info!("[Chat] Reaction LIVE QUERY subscription active");
+                log::info!("[Chat] Reaction LIVE QUERY subscription active (filtering to {} messages)", messages.read().len());
                 
                 // Consume notifications
                 while let Some(notification) = stream.next().await {
@@ -340,6 +331,15 @@ pub fn ChatComponent() -> Element {
                         Ok(notif) => {
                             let reaction = notif.data;
                             let message_id = reaction.message_id.clone();
+                            
+                            // ✅ FILTER: Only process reactions for messages in this conversation
+                            let message_exists = messages.read().iter().any(|m| m.id == message_id);
+                            if !message_exists {
+                                log::trace!("[Chat] Ignoring reaction for message not in conversation: {}", message_id);
+                                continue; // Skip reactions for other conversations
+                            }
+                            
+                            log::debug!("[Chat] Processing reaction for message: {}", message_id);
                             
                             // Reload reactions for this message
                             match database.get_reaction_counts(&message_id).await {
@@ -410,6 +410,57 @@ pub fn ChatComponent() -> Element {
         }
     });
 
+    // Watch for conversation ID changes and reset scroll flag
+    use_effect(move || {
+        let _current_id = conversation_id.read().clone();
+        
+        // Reset scroll-to-unread flag when conversation changes
+        has_scrolled_to_unread.set(false);
+        
+        // Reset messages (they will be reloaded by LIVE QUERY)
+        messages.set(Vec::new());
+    });
+
+    // Scroll to first unread message on conversation load
+    use_effect(move || {
+        let messages_list = messages.read().clone();
+        let scrolled = *has_scrolled_to_unread.read();
+        
+        // Only scroll once per conversation open, and only if there are unreads
+        if !scrolled && !messages_list.is_empty()
+            && let Some(first_unread) = messages_list.iter().find(|msg| msg.unread) {
+            let message_id = first_unread.id.clone();
+            has_scrolled_to_unread.set(true);
+            
+            log::debug!("[Chat] Scrolling to first unread: {}", message_id);
+            
+            spawn(async move {
+                use dioxus::document;
+                
+                let script = format!(
+                    r#"
+                    const element = document.getElementById('message-{}');
+                    if (element) {{
+                        element.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
+                        // Highlight briefly
+                        element.style.backgroundColor = 'rgba(59, 130, 246, 0.2)';
+                        setTimeout(() => element.style.backgroundColor = '', 2000);
+                    }}
+                    "#,
+                    message_id
+                );
+                
+                let eval_result = document::eval(&script);
+                if let Err(e) = eval_result.await {
+                    log::warn!("[Chat] Failed to scroll to unread: {}", e);
+                }
+            });
+        }
+    });
+
+    // Clone database for use in MentionInput on_submit handler (needed before send_message captures environment)
+    let database_for_mention_input = environment.database.clone();
+
     let mut send_message = move |_| {
         let content = input_value.read().trim().to_string();
         if !content.is_empty() && !*is_sending.read() {
@@ -429,10 +480,11 @@ pub fn ChatComponent() -> Element {
                 let current_conversation_id = conversation_id.read().clone();
 
                 async move {
-                    match agent_chat::send_chat_message(
+                    match agent_chat::send_message(
                         database,
                         current_conversation_id,
                         content,
+                        None, // mentioned_agents (None = use all participants)
                         parent_message_id,
                     )
                     .await
@@ -479,6 +531,30 @@ pub fn ChatComponent() -> Element {
         replying_to.set(None);
     };
 
+    let confirm_delete = move |message_id: String| {
+        show_delete_confirmation.set(None);
+        
+        spawn({
+            let model = environment.model.clone();
+            async move {
+                match model.delete_status(message_id.clone()).await {
+                    Ok(_) => {
+                        log::info!("[Chat] Message deleted: {}", message_id);
+                        // LIVE QUERY automatically removes message from UI
+                    }
+                    Err(e) => {
+                        log::error!("[Chat] Failed to delete message: {}", e);
+                        // TODO: Show error toast to user
+                    }
+                }
+            }
+        });
+    };
+
+    let cancel_delete = move |_| {
+        show_delete_confirmation.set(None);
+    };
+
     // Subscribe to agent tool-use events
     use_effect(move || {
         spawn(async move {
@@ -518,7 +594,8 @@ pub fn ChatComponent() -> Element {
                     ChatMessageView { 
                         message: message.clone(),
                         on_reply: start_reply,
-                        bookmarked_msg_ids: bookmarked_msg_ids
+                        bookmarked_msg_ids: bookmarked_msg_ids,
+                        show_delete_confirmation: show_delete_confirmation
                     }
                 }
                 if *is_sending.read() {
@@ -550,25 +627,94 @@ pub fn ChatComponent() -> Element {
                 }
             }
             
-            div {
-                class: "p-4 bg-gradient-to-r from-[#1a1a2e]/80 to-[#16213e]/80 glass border-t border-white/10",
-                form {
-                    onsubmit: move |_| {
-                        send_message(());
-                    },
-                    input {
-                        class: "flex-1 px-4 py-3 bg-white/5 border border-white/10 rounded-lg text-white text-base transition-colors duration-200 focus:outline-none focus:border-[#00a8ff] placeholder:text-white/40",
-                        r#type: "text",
-                        placeholder: ui_text::chat_input_placeholder(),
-                        value: "{input_value.read()}",
-                        oninput: move |e| input_value.set(e.value()),
-                        disabled: *is_sending.read(),
+            // Load conversation to check participant count
+            {
+                let is_multi_agent = conversation_for_input.read().as_ref()
+                    .and_then(|opt| opt.as_ref())
+                    .map(|conv| conv.participants.len() > 1)
+                    .unwrap_or(false);
+                
+                let room_agents = conversation_for_input.read().as_ref()
+                    .and_then(|opt| opt.as_ref())
+                    .map(|conv| conv.participants.iter().map(|p| p.0.clone()).collect::<Vec<String>>())
+                    .unwrap_or_default();
+                
+                if is_multi_agent {
+                    let database_for_submit = database_for_mention_input.clone();
+                    let room_agents_for_submit = room_agents.clone();
+                    
+                    rsx! {
+                        // Multi-agent: Use MentionInput with @mention autocomplete
+                        div {
+                            class: "p-4 bg-gradient-to-r from-[#1a1a2e]/80 to-[#16213e]/80 glass border-t border-white/10",
+                            MentionInput {
+                                value: input_value,
+                                on_submit: move |msg: String| {
+                                    // Parse @mentions from message
+                                    let mentioned = mention_parser::parse_mentions(&msg);
+                                    
+                                    // Filter to only participants in this conversation
+                                    let valid_mentions: Vec<String> = mentioned
+                                        .into_iter()
+                                        .filter(|agent_id| room_agents_for_submit.contains(agent_id))
+                                        .collect();
+                                    
+                                    // Send with mentioned_agents parameter
+                                    input_value.set(String::new());
+                                    is_sending.set(true);
+                                    
+                                    spawn({
+                                        let database = database_for_submit.clone();
+                                        let current_conversation_id = conversation_id.read().clone();
+                                        let mut is_sending = is_sending;
+                                        
+                                        async move {
+                                            match agent_chat::send_message(
+                                                database,
+                                                current_conversation_id,
+                                                msg,
+                                                Some(valid_mentions),
+                                                None,
+                                            ).await {
+                                                Ok(_) => log::debug!("[Chat] Message sent to mentioned agents"),
+                                                Err(e) => log::error!("[Chat] Failed: {}", e),
+                                            }
+                                            is_sending.set(false);
+                                        }
+                                    });
+                                },
+                                disabled: *is_sending.read(),
+                                room_agents: room_agents,
+                            }
+                        }
                     }
-                    button {
-                        class: "px-6 py-3 bg-[var(--g-accentColor)] text-white rounded-lg font-semibold cursor-pointer transition-all duration-200 hover:bg-[var(--g-accentColorHighlight)] hover:-translate-y-px active:translate-y-0",
-                        r#type: "submit",
-                        disabled: *is_sending.read(),
-                        "Send"
+                } else {
+                    rsx! {
+                        // Single-agent: Use regular input with professional styling
+                        div {
+                            class: "p-6 bg-gradient-to-r from-[#1a1a2e]/95 to-[#16213e]/95 backdrop-blur-xl glass border-t border-white/20 shadow-[0_-4px_20px_rgba(0,0,0,0.3)]",
+                            form {
+                                class: "flex items-center gap-3",
+                                onsubmit: move |evt| {
+                                    evt.prevent_default();
+                                    send_message(());
+                                },
+                                input {
+                                    class: "flex-1 px-5 py-4 bg-white/10 border border-white/20 rounded-xl text-white text-base transition-all duration-200 focus:outline-none focus:border-[#00a8ff] focus:bg-white/15 focus:shadow-[0_0_20px_rgba(0,168,255,0.2)] placeholder:text-white/50 shadow-inner",
+                                    r#type: "text",
+                                    placeholder: ui_text::chat_input_placeholder(),
+                                    value: "{input_value.read()}",
+                                    oninput: move |e| input_value.set(e.value()),
+                                    disabled: *is_sending.read(),
+                                }
+                                button {
+                                    class: "px-8 py-4 bg-gradient-to-r from-[#0078ff] to-[#00a8ff] text-white rounded-xl font-bold cursor-pointer transition-all duration-200 hover:from-[#0088ff] hover:to-[#00b8ff] hover:shadow-[0_4px_20px_rgba(0,168,255,0.4)] hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0",
+                                    r#type: "submit",
+                                    disabled: *is_sending.read(),
+                                    "Send"
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -582,6 +728,74 @@ pub fn ChatComponent() -> Element {
                     }
                 }
             }
+
+            // Delete confirmation dialog
+            if let Some(message_id) = show_delete_confirmation.read().as_ref() {
+                DeleteConfirmationDialog {
+                    message_id: message_id.clone(),
+                    on_confirm: confirm_delete,
+                    on_cancel: cancel_delete,
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn DeleteConfirmationDialog(
+    message_id: String,
+    on_confirm: EventHandler<String>,
+    on_cancel: EventHandler<()>,
+) -> Element {
+    rsx! {
+        div {
+            class: "fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50",
+            onclick: move |_| on_cancel.call(()),
+
+            div {
+                class: "bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 w-[400px] border border-white/10 shadow-2xl",
+                onclick: move |e| e.stop_propagation(),
+
+                // Header
+                div {
+                    class: "flex items-center gap-3 mb-4",
+                    span {
+                        class: "text-2xl",
+                        "🗑️"
+                    }
+                    h3 {
+                        class: "text-xl font-bold text-white",
+                        "Delete Message?"
+                    }
+                }
+
+                // Explanation
+                div {
+                    class: "mb-6 text-sm text-gray-300 space-y-2",
+                    p {
+                        "This message will be removed from the chat."
+                    }
+                    p {
+                        class: "text-xs text-gray-400 italic",
+                        "Note: The message remains in the database for AI context but is hidden from view."
+                    }
+                }
+
+                // Action buttons
+                div {
+                    class: "flex gap-3",
+                    button {
+                        class: "flex-1 px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-white hover:bg-white/10 transition-all duration-200",
+                        onclick: move |_| on_cancel.call(()),
+                        "Cancel"
+                    }
+                    button {
+                        class: "flex-1 px-4 py-2 bg-red-500 rounded-lg text-white font-semibold hover:bg-red-600 transition-all duration-200",
+                        onclick: move |_| on_confirm.call(message_id.clone()),
+                        "Delete"
+                    }
+                }
+            }
         }
     }
 }
@@ -590,7 +804,8 @@ pub fn ChatComponent() -> Element {
 fn ChatMessageView(
     message: ChatMessage, 
     on_reply: EventHandler<(String, String)>,
-    bookmarked_msg_ids: Signal<HashSet<String>>
+    bookmarked_msg_ids: Signal<HashSet<String>>,
+    mut show_delete_confirmation: Signal<Option<String>>
 ) -> Element {
     let environment = use_context::<Environment>();
     let model = environment.model.clone();
@@ -641,9 +856,11 @@ fn ChatMessageView(
     let database_for_reactions = database.clone();
     let database_for_bookmark = database.clone();
     let bookmarked_msg_ids_for_button = bookmarked_msg_ids;
+    let message_id_for_delete = message.id.clone();
 
     rsx! {
         div {
+            id: "message-{message.id}",
             class: "group relative flex flex-col px-5 py-4 rounded-xl max-w-[70%] animate-[slideIn_0.3s_ease-out] {sender_classes} {indent_class}",
             
             // Unread indicator dot
@@ -736,6 +953,21 @@ fn ChatMessageView(
                         show_emoji_picker.set(!current);
                     },
                     "😊"
+                }
+            }
+            
+            // Delete button (visible on hover, only for user messages)
+            if matches!(message.sender, MessageSender::User) {
+                div {
+                    class: "absolute top-2 right-12 opacity-0 group-hover:opacity-100 transition-opacity duration-200",
+                    button {
+                        class: "px-2 py-1 bg-red-500/20 border border-red-500/50 rounded text-white/70 cursor-pointer transition-all duration-200 hover:bg-red-500/30 hover:border-red-500 hover:text-white",
+                        onclick: move |_| {
+                            let message_id = message_id_for_delete.clone();
+                            show_delete_confirmation.set(Some(message_id));
+                        },
+                        "🗑️"
+                    }
                 }
             }
             
@@ -897,15 +1129,15 @@ async fn ensure_default_template(
     let templates = database.list_agent_templates().await?;
 
     if let Some(template) = templates.first() {
-        log::debug!("[Chat] Using existing template: {}", template.id.0);
-        return Ok(template.id.0.clone());
+        log::debug!("[Chat] Using existing template: {}", template.id);
+        return Ok(template.id.0.to_sql());
     }
 
     // No templates exist - create default
     log::info!("[Chat] Creating default template");
 
     let default_template = AgentTemplate {
-        id: AgentTemplateId("template:default".to_string()),
+        id: AgentTemplateId(surrealdb_types::RecordId::new("agent_template", "default")),
         name: "CYRUP Assistant".to_string(),
         system_prompt:
             "You are CYRUP, a helpful AI assistant. Provide clear, concise, and accurate responses."
@@ -918,5 +1150,5 @@ async fn ensure_default_template(
     };
 
     database.create_template(&default_template).await?;
-    Ok(default_template.id.0)
+    Ok(default_template.id.0.to_sql())
 }

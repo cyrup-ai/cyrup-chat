@@ -126,8 +126,9 @@ pub fn SidebarComponent(store: SidebarSignal) -> Element {
 
                     use crate::components::component_stack::{Stack, State, RootTimelineKind};
 
+                    // Multi-agent conversations are now unified with single-agent in ConversationList
                     rsx!(Stack {
-                        store: use_signal(|| State::new(RootTimelineKind::RoomList(account.clone())))
+                        store: use_signal(|| State::new(RootTimelineKind::ConversationList(account.clone())))
                     })
                 } else if tabs.get(4).is_some_and(|t| tab == t.id) {
                     rsx!(SidebarMoreComponent {

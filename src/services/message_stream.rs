@@ -160,11 +160,11 @@ pub async fn stream_agent_responses(
 fn create_agent_message(conversation_id: &str, content: &str) -> Message {
     Message {
         id: MessageId::default(), // DB generates actual ID
-        conversation_id: ConversationId(conversation_id.to_string()),
+        conversation_id: ConversationId::from(conversation_id),
         author: "Assistant".to_string(),
         author_type: AuthorType::Agent,
         content: content.to_string(),
-        timestamp: chrono::Utc::now(),
+        timestamp: chrono::Utc::now().into(),
         in_reply_to: None,
         message_type: MessageType::Normal,
         attachments: Vec::new(),
@@ -178,11 +178,11 @@ fn create_agent_message(conversation_id: &str, content: &str) -> Message {
 fn create_error_message(conversation_id: &str, error: &str) -> Message {
     Message {
         id: MessageId::default(),
-        conversation_id: ConversationId(conversation_id.to_string()),
+        conversation_id: ConversationId::from(conversation_id),
         author: "system".to_string(),
         author_type: AuthorType::System,
         content: format!("⚠️ Agent Error: {}", error),
-        timestamp: chrono::Utc::now(),
+        timestamp: chrono::Utc::now().into(),
         in_reply_to: None,
         message_type: MessageType::Error,
         attachments: Vec::new(),

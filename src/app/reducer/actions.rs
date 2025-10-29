@@ -20,4 +20,7 @@ pub enum AppAction {
 
     // Error handling
     ClearError,
+
+    // Menu events from native menu system
+    MenuEvent(crate::environment::types::MainMenuEvent),
 }

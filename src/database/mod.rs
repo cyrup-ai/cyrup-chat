@@ -6,14 +6,16 @@
 use surrealdb::{
     Surreal,
     engine::local::{Db, SurrealKv},
+    opt::{capabilities::{Capabilities, ExperimentalFeature}, Config},
 };
+use surrealdb_types::SurrealValue;
 
 // Module declarations for database operations (created in later tasks)
 pub mod bookmarks;
 pub mod conversations;
 pub mod messages;
+pub mod migration;
 pub mod reactions;
-pub mod rooms;
 pub mod templates;
 
 // Re-export schema initialization
@@ -51,13 +53,19 @@ impl Database {
             .join("cyrup");
 
         // Create directory if it doesn't exist
-        std::fs::create_dir_all(&data_dir)
+        tokio::fs::create_dir_all(&data_dir)
+            .await
             .map_err(|e| format!("Failed to create data directory: {}", e))?;
 
         let db_path = data_dir.join("chat.db");
 
+        // Enable experimental features (record references) for schema constraints
+        let capabilities = Capabilities::new()
+            .with_experimental_feature_allowed(ExperimentalFeature::RecordReferences);
+        let config = Config::new().capabilities(capabilities);
+
         // IMPORTANT: Use SurrealKv (not RocksDb) from forked SurrealDB
-        let client = Surreal::new::<SurrealKv>(db_path)
+        let client = Surreal::new::<SurrealKv>((db_path, config))
             .await
             .map_err(|e| format!("Database connection failed: {}", e))?;
 
@@ -72,10 +80,18 @@ impl Database {
             .await
             .map_err(|e| format!("Database selection failed: {}", e))?;
 
-        Ok(Self {
+        let db = Self {
             client,
             token_budget_config: crate::view_model::TokenBudgetConfig::default(),
-        })
+        };
+
+        // Initialize schema (safe to call multiple times)
+        init_schema(db.client()).await?;
+
+        // Auto-run migrations if needed
+        db.auto_migrate().await?;
+
+        Ok(db)
     }
 
     /// Get reference to SurrealDB client for direct queries
@@ -97,5 +113,61 @@ impl Database {
     /// Allows runtime tuning of token budget parameters without recompilation
     pub fn set_token_budget_config(&mut self, config: crate::view_model::TokenBudgetConfig) {
         self.token_budget_config = config;
+    }
+
+    /// Get current schema version (0 if no version set)
+    async fn get_schema_version(&self) -> Result<i64, String> {
+        let query = "SELECT version FROM schema_version ORDER BY applied_at DESC LIMIT 1";
+
+        let mut response = self.client()
+            .query(query)
+            .await
+            .map_err(|e| format!("Failed to get schema version: {}", e))?;
+
+        #[derive(serde::Deserialize, surrealdb_types::SurrealValue)]
+        struct VersionRecord {
+            version: i64,
+        }
+
+        let versions: Vec<VersionRecord> = response
+            .take(0)
+            .unwrap_or_else(|_| Vec::new());
+
+        Ok(versions.first().map(|v| v.version).unwrap_or(0))
+    }
+
+    /// Set schema version after successful migration
+    async fn set_schema_version(&self, version: i64) -> Result<(), String> {
+        let query = "CREATE schema_version CONTENT { version: $version }";
+
+        self.client()
+            .query(query)
+            .bind(("version", version))
+            .await
+            .map_err(|e| format!("Failed to set schema version: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Auto-run migrations based on schema version
+    async fn auto_migrate(&self) -> Result<(), String> {
+        let current_version = self.get_schema_version().await.unwrap_or(0);
+
+        log::info!("[Database] Current schema version: {}", current_version);
+
+        // Migration 1: Unify conversations and rooms
+        if current_version < 1 {
+            log::info!("[Database] Running migration 1: Unify conversations/rooms");
+
+            let (convos, rooms) = self.migrate_to_unified_conversations().await?;
+
+            log::info!("[Database] Migrated {} conversations, {} rooms", convos, rooms);
+
+            self.set_schema_version(1).await?;
+        } else {
+            log::info!("[Database] Schema up to date (version {})", current_version);
+        }
+
+        Ok(())
     }
 }

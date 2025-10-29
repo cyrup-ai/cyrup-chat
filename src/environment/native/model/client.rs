@@ -6,6 +6,7 @@ use crate::environment::model::Status;
 use crate::view_model::conversation::ConversationId;
 use crate::view_model::conversation::{Conversation, ConversationSummary};
 use crate::view_model::message::{AuthorType, Message, MessageId, MessageType};
+use surrealdb_types::ToSql;
 
 use megalodon::entities::StatusVisibility;
 
@@ -95,14 +96,18 @@ impl Model {
             .await
             .map_err(|e| ModelError::QueryFailed(format!("Failed to get conversation: {}", e)))?;
 
-        // Lazy spawn: check if agent session exists
-        if conversation.agent_session_id.is_none() {
-            log::info!("Lazy spawning agent for conversation: {}", conversation_id);
+        // Lazy spawn: check if any agent sessions exist for this conversation
+        // For single-agent conversations, spawn if agent_sessions is empty
+        if conversation.agent_sessions.is_empty() && !conversation.participants.is_empty() {
+            log::info!("Lazy spawning agents for conversation: {}", conversation_id);
+
+            // For single-agent conversations, spawn the one participant
+            let agent_id = &conversation.participants[0].0;
 
             // Get agent template from database
             let template = self
                 .database()
-                .get_template(&conversation.template_id.0)
+                .get_template(agent_id)
                 .await
                 .map_err(|e| ModelError::QueryFailed(format!("Failed to get template: {}", e)))?;
 
@@ -131,9 +136,9 @@ impl Model {
 
             log::info!("Agent spawned with session_id: {}", session_id);
 
-            // Update conversation with session_id
+            // Update conversation with session_id for this agent
             self.database()
-                .update_conversation_session(conversation_id, &session_id)
+                .update_agent_session(conversation_id, agent_id, &session_id)
                 .await
                 .map_err(|e| ModelError::QueryFailed(format!("Failed to update session: {}", e)))?;
         }
@@ -151,7 +156,7 @@ impl Model {
             author: "David Maple".to_string(), // Q39: Hardcoded user for MVP
             author_type: AuthorType::Human,
             content: message.to_string(),
-            timestamp: chrono::Utc::now(),
+            timestamp: chrono::Utc::now().into(),
             in_reply_to: None,
             message_type: MessageType::Normal,
             attachments: Vec::new(),
@@ -464,16 +469,17 @@ impl Model {
         // Spawn background task for each conversation with an active agent session
         for conv_summary in conversations {
             // Get full conversation details to access agent_session_id
-            let conversation = match self.get_conversation(&conv_summary.id.0).await {
+            let conv_id_str = conv_summary.id.0.to_sql();
+            let conversation = match self.get_conversation(&conv_id_str).await {
                 Ok(conv) => conv,
                 Err(e) => {
-                    log::warn!("Failed to get conversation {}: {}", conv_summary.id.0, e);
+                    log::warn!("Failed to get conversation {}: {}", conv_id_str, e);
                     continue;
                 }
             };
 
             // Only monitor conversations with active agent sessions
-            if conversation.agent_session_id.is_none() {
+            if conversation.agent_sessions.is_empty() {
                 continue;
             }
 
@@ -485,7 +491,7 @@ impl Model {
             log::info!(
                 "Spawning stream monitor for conversation: {} ({})",
                 conv_title,
-                conv_id
+                conv_id.to_sql()
             );
 
             // Spawn background task to poll agent output
@@ -501,7 +507,7 @@ impl Model {
                     {
                         Ok(resp) => resp,
                         Err(e) => {
-                            log::error!("Stream error for conversation {}: {}", conv_id, e);
+                            log::error!("Stream error for conversation {}: {}", conv_id.to_sql(), e);
                             break; // Exit loop on error
                         }
                     };
@@ -514,7 +520,7 @@ impl Model {
                         {
                             log::debug!(
                                 "Stream message in {}: {} (type: {})",
-                                conv_id,
+                                conv_id.to_sql(),
                                 &message.content[..message.content.len().min(50)],
                                 serialized_msg.message_type
                             );
@@ -536,7 +542,7 @@ impl Model {
                     if response.is_complete {
                         log::info!(
                             "Agent session complete for conversation {}, ending stream",
-                            conv_id
+                            conv_id.to_sql()
                         );
                         break;
                     }
@@ -545,7 +551,7 @@ impl Model {
                     tokio::time::sleep(poll_interval).await;
                 }
 
-                log::debug!("Stream monitor terminated for conversation: {}", conv_id);
+                log::debug!("Stream monitor terminated for conversation: {}", conv_id.to_sql());
             });
         }
 
@@ -735,7 +741,7 @@ fn convert_serialized_to_message(
         author,
         author_type,
         content,
-        timestamp: serialized.timestamp,
+        timestamp: serialized.timestamp.into(),
         in_reply_to: None,
         message_type,
         attachments: Vec::new(),
@@ -772,7 +778,7 @@ fn create_conversation_entity(
         moved: None,
         suspended: None,
         limited: None,
-        created_at: message.timestamp,
+        created_at: *message.timestamp,
         followers_count: 0,
         following_count: 0,
         statuses_count: 0,
@@ -792,9 +798,9 @@ fn create_conversation_entity(
 
     // Create status from message
     let status = Status {
-        id: message.id.0.clone(),
+        id: message.id.0.to_sql(),
         uri: String::new(),
-        created_at: message.timestamp,
+        created_at: *message.timestamp,
         account: agent_account.clone(),
         content: message.content.clone(),
         visibility: StatusVisibility::Direct, // Conversation is private
@@ -912,11 +918,11 @@ fn message_to_notification(message: Message) -> crate::environment::model::Notif
     use megalodon::entities::Account;
 
     Notification {
-        id: message.id.0.clone(),
+        id: message.id.0.to_sql(),
         r#type: NotificationType::Mention,
-        created_at: message.timestamp,
+        created_at: *message.timestamp,
         account: Some(Account {
-            id: message.conversation_id.0.clone(),
+            id: message.conversation_id.0.to_sql(),
             username: message.author.clone(),
             acct: message.author.clone(),
             display_name: message.author.clone(),
@@ -927,7 +933,7 @@ fn message_to_notification(message: Message) -> crate::environment::model::Notif
             moved: None,
             suspended: None,
             limited: None,
-            created_at: message.timestamp,
+            created_at: *message.timestamp,
             followers_count: 0,
             following_count: 0,
             statuses_count: 0,
@@ -953,7 +959,7 @@ fn message_to_notification(message: Message) -> crate::environment::model::Notif
 /// Create megalodon Account from message author
 fn create_account_from_message(message: &Message) -> megalodon::entities::Account {
     megalodon::entities::Account {
-        id: message.conversation_id.0.clone(),
+        id: message.conversation_id.0.to_sql(),
         username: message.author.clone(),
         acct: message.author.clone(),
         display_name: message.author.clone(),
@@ -964,7 +970,7 @@ fn create_account_from_message(message: &Message) -> megalodon::entities::Accoun
         moved: None,
         suspended: None,
         limited: None,
-        created_at: message.timestamp,
+        created_at: *message.timestamp,
         followers_count: 0,
         following_count: 0,
         statuses_count: 0,
@@ -986,11 +992,11 @@ fn create_account_from_message(message: &Message) -> megalodon::entities::Accoun
 /// Transform AgentTemplate to Status for UI listing
 fn template_to_status(template: crate::view_model::AgentTemplate) -> Status {
     Status {
-        id: template.id.0.clone(),
+        id: template.id.0.to_sql(),
         uri: String::new(),
         created_at: chrono::Utc::now(),
         account: megalodon::entities::Account {
-            id: template.id.0.clone(),
+            id: template.id.0.to_sql(),
             username: template.name.clone(),
             acct: template.name.clone(),
             display_name: template.name.clone(),
@@ -1052,12 +1058,12 @@ fn template_to_status(template: crate::view_model::AgentTemplate) -> Status {
 /// Transform Message to Status with favorite status for UI
 fn message_to_status(message: &Message, is_favourited: bool) -> Status {
     Status {
-        id: message.id.0.clone(),
+        id: message.id.0.to_sql(),
         uri: String::new(),
-        created_at: message.timestamp,
+        created_at: *message.timestamp,
         account: create_account_from_message(message),
         content: message.content.clone(),
-        in_reply_to_id: message.in_reply_to.as_ref().map(|id| id.0.clone()),
+        in_reply_to_id: message.in_reply_to.as_ref().map(|id| id.0.to_sql()),
         visibility: StatusVisibility::Public,
         favourited: Some(is_favourited),
         favourites_count: if is_favourited { 1 } else { 0 },
@@ -1090,12 +1096,12 @@ fn message_to_status(message: &Message, is_favourited: bool) -> Status {
 /// Transform Message to Status with bookmark status for UI
 fn message_to_status_with_bookmark(message: &Message, is_bookmarked: bool) -> Status {
     Status {
-        id: message.id.0.clone(),
+        id: message.id.0.to_sql(),
         uri: String::new(),
-        created_at: message.timestamp,
+        created_at: *message.timestamp,
         account: create_account_from_message(message),
         content: message.content.clone(),
-        in_reply_to_id: message.in_reply_to.as_ref().map(|id| id.0.clone()),
+        in_reply_to_id: message.in_reply_to.as_ref().map(|id| id.0.to_sql()),
         visibility: StatusVisibility::Public,
         bookmarked: Some(is_bookmarked),
         sensitive: false,
@@ -1128,12 +1134,12 @@ fn message_to_status_with_bookmark(message: &Message, is_bookmarked: bool) -> St
 /// Transform Message to Status (simple version for general use)
 fn message_to_status_simple(message: &Message) -> Status {
     Status {
-        id: message.id.0.clone(),
+        id: message.id.0.to_sql(),
         uri: String::new(),
-        created_at: message.timestamp,
+        created_at: *message.timestamp,
         account: create_account_from_message(message),
         content: message.content.clone(),
-        in_reply_to_id: message.in_reply_to.as_ref().map(|id| id.0.clone()),
+        in_reply_to_id: message.in_reply_to.as_ref().map(|id| id.0.to_sql()),
         visibility: StatusVisibility::Public,
         sensitive: false,
         spoiler_text: String::new(),

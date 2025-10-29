@@ -158,6 +158,17 @@ fn create_view_menu(menu_bar: &Menu, config: &MainMenuConfig) {
         log::error!("Failed to append mentions item: {e}");
     }
 
+    // Messages menu item with safe error handling
+    let messages_item = MenuItem::with_id(
+        MainMenuEvent::Messages.menu_id(),
+        "Messages",
+        config.logged_in,
+        Some(MudaAccelerator::new(Some(Modifiers::SUPER), Code::Digit3)),
+    );
+    if let Err(e) = view_m.append(&messages_item) {
+        log::error!("Failed to append messages item: {e}");
+    }
+
     // More menu item with safe error handling
     let more_item = MenuItem::with_id(
         MainMenuEvent::More.menu_id(),

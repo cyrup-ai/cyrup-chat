@@ -1,19 +1,18 @@
-//! Room list provider - displays multi-agent rooms as timeline
-//!
-//! Cloned from conversation_list.rs with rooms-specific adaptations.
-//! Implements TimelineProvider trait for room list display.
-
+//! Room list provider - displays conversations as chat rooms
 use super::TimelineProvider;
 use crate::{
-    environment::{types::TimelineDirection, Environment},
-    view_model::{RoomSummary, StatusId, StatusViewModel},
+    environment::{Environment, types::TimelineDirection},
+    view_model::{ConversationSummary, StatusId, StatusViewModel},
 };
 
 use dioxus::prelude::{ReadableExt, WritableExt};
 use futures_util::Future;
 use std::pin::Pin;
 
-/// Provider that loads room list from database
+/// Provider that loads conversations as "rooms" from database
+/// 
+/// In the context of agent conversations, "rooms" represent individual
+/// conversation threads that can be joined and interacted with.
 pub struct RoomListProvider {
     environment: Environment,
 }
@@ -31,9 +30,9 @@ impl std::fmt::Debug for RoomListProvider {
 }
 
 impl TimelineProvider for RoomListProvider {
-    type Id = StatusId;
-    type Element = crate::environment::model::Status;
-    type ViewModel = StatusViewModel;
+    type Id = StatusId; // Room ID mapped to StatusId
+    type Element = crate::environment::model::Status; // Timeline system expects Status
+    type ViewModel = StatusViewModel; // Transformed for UI
 
     fn should_auto_reload(&self) -> bool {
         false // User manually refreshes room list
@@ -44,7 +43,7 @@ impl TimelineProvider for RoomListProvider {
     }
 
     fn forced_direction(&self) -> Option<TimelineDirection> {
-        Some(TimelineDirection::NewestTop)
+        Some(TimelineDirection::NewestTop) // Newest rooms at top
     }
 
     fn reset(&self) {
@@ -56,11 +55,12 @@ impl TimelineProvider for RoomListProvider {
     }
 
     fn scroll_to_item(&self, updates: &[crate::environment::model::Status]) -> Option<StatusId> {
+        // Scroll to most recent status
         updates
             .iter()
             .max_by_key(|status| status.created_at)
             .map(|status| {
-                log::debug!("[RoomList] Scrolling to room: {}", status.id);
+                log::debug!("Room list scrolling to status: {}", status.id);
                 StatusId(status.id.clone())
             })
     }
@@ -70,15 +70,14 @@ impl TimelineProvider for RoomListProvider {
         _after: Option<StatusId>,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<crate::environment::model::Status>, String>> + Send>>
     {
+        // Load conversations as "rooms"
         let db = self.environment.database.clone();
         Box::pin(async move {
-            log::debug!("[RoomList] Fetching rooms from database");
-            let summaries = db.list_rooms().await?;
-            log::info!("[RoomList] Loaded {} rooms", summaries.len());
-
+            let summaries = db.list_conversations().await?;
+            // Convert ConversationSummary to Status for timeline system
             Ok(summaries
                 .iter()
-                .map(room_summary_to_status)
+                .map(conversation_summary_to_room_status)
                 .collect())
         })
     }
@@ -90,14 +89,11 @@ impl TimelineProvider for RoomListProvider {
         is_reload: bool,
     ) -> bool {
         let can_load_more = !updates.is_empty();
+
+        // Transform Status → StatusViewModel
         let view_models: Vec<StatusViewModel> = updates.iter().map(StatusViewModel::new).collect();
 
-        log::debug!(
-            "[RoomList] Processing {} room updates (reload={})",
-            view_models.len(),
-            is_reload
-        );
-
+        // Merge into storage
         self.environment
             .storage
             .write_unchecked()
@@ -115,21 +111,17 @@ impl TimelineProvider for RoomListProvider {
     }
 }
 
-/// Transform RoomSummary to Status for timeline system compatibility
-fn room_summary_to_status(summary: &RoomSummary) -> crate::environment::model::Status {
+/// Transform ConversationSummary to Status representing a chat room
+fn conversation_summary_to_room_status(
+    summary: &ConversationSummary,
+) -> crate::environment::model::Status {
     use crate::environment::model::Status;
     use megalodon::entities::{Account, StatusVisibility};
-
-    let participant_names: Vec<String> = summary
-        .participants
-        .iter()
-        .map(|p| p.0.clone())
-        .collect();
 
     Status {
         id: summary.id.0.clone(),
         uri: String::new(),
-        created_at: summary.last_message_timestamp,
+        created_at: *summary.last_message_timestamp,
         account: Account {
             id: summary.id.0.clone(),
             username: format!("room_{}", &summary.id.0[..8]),
@@ -142,26 +134,26 @@ fn room_summary_to_status(summary: &RoomSummary) -> crate::environment::model::S
             moved: None,
             suspended: None,
             limited: None,
-            created_at: summary.last_message_timestamp,
-            followers_count: summary.participants.len() as i32,
+            created_at: *summary.last_message_timestamp,
+            followers_count: 0,
             following_count: 0,
             statuses_count: 0,
-            note: format!("Participants: {}", participant_names.join(", ")),
+            note: String::new(),
             url: String::new(),
-            avatar: String::new(),
-            avatar_static: String::new(),
+            avatar: summary.agent_avatar.clone().unwrap_or_default(),
+            avatar_static: summary.agent_avatar.clone().unwrap_or_default(),
             header: String::new(),
             header_static: String::new(),
             emojis: Vec::new(),
             fields: Vec::new(),
-            bot: true,
+            bot: false,
             source: None,
             role: None,
             mute_expires_at: None,
         },
         content: summary.last_message_preview.clone(),
         visibility: StatusVisibility::Public,
-        replies_count: 0,
+        replies_count: summary.unread_count,
         in_reply_to_id: None,
         sensitive: false,
         spoiler_text: String::new(),

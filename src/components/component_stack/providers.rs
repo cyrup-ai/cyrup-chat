@@ -1,7 +1,7 @@
 //! Timeline kind and provider mappings
 
 use crate::components::status_timeline::{
-    AnyTimelineProvider, BookmarkTimelineProvider, ConversationListProvider, RoomListProvider,
+    AnyTimelineProvider, BookmarkTimelineProvider, ConversationListProvider,
 };
 use crate::environment::{Environment, Model};
 use crate::view_model::AccountViewModel;
@@ -12,7 +12,6 @@ use crate::view_model::AccountViewModel;
 pub enum RootTimelineKind {
     Bookmarks(AccountViewModel),
     ConversationList(AccountViewModel),
-    RoomList(AccountViewModel),
 }
 
 #[derive(Debug, Clone)]
@@ -38,10 +37,6 @@ impl RootTimelineKind {
                 AnyTimelineProvider::new(ConversationListProvider::new(environment.clone()), &a.id)
                     .into()
             }
-            RootTimelineKind::RoomList(a) => {
-                AnyTimelineProvider::new(RoomListProvider::new(environment.clone()), &a.id)
-                    .into()
-            }
         }
     }
 
@@ -49,7 +44,6 @@ impl RootTimelineKind {
         match self {
             RootTimelineKind::Bookmarks(a) => a.clone(),
             RootTimelineKind::ConversationList(a) => a.clone(),
-            RootTimelineKind::RoomList(a) => a.clone(),
         }
     }
 }

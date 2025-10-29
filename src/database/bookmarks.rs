@@ -68,7 +68,7 @@ impl Database {
         // Convert &str to String to satisfy 'static lifetime for async
         let query = r"
             DELETE FROM bookmark 
-            WHERE user_id = $user AND message_id = $message
+            WHERE user_id = $user AND message_id = type::record('message', $message)
         ";
 
         self.client()
@@ -91,11 +91,11 @@ impl Database {
     /// * `Err(String)` - Error message if query fails
     ///
     /// # Database Operation
-    /// Uses graph traversal to fetch full Message objects, not just IDs
+    /// Uses record link dereferencing to fetch full Message objects, not just IDs
     pub async fn get_bookmarked_messages(&self, user_id: &str) -> Result<Vec<Message>, String> {
         // Convert &str to String to satisfy 'static lifetime for async
         let query = r"
-            SELECT ->message_id->message.*
+            SELECT message_id.*, created_at
             FROM bookmark
             WHERE user_id = $user
             ORDER BY created_at DESC
@@ -131,7 +131,7 @@ impl Database {
         // Convert &str to String to satisfy 'static lifetime for async
         let query = r"
             SELECT id FROM bookmark 
-            WHERE user_id = $user AND message_id = $message
+            WHERE user_id = $user AND message_id = type::record('message', $message)
             LIMIT 1
         ";
 

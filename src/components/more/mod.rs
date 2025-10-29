@@ -2,7 +2,7 @@ mod reducer;
 #[allow(dead_code)] // More menu component system - pending UI integration
 mod view;
 
-pub use reducer::State;
+pub use reducer::{State, Action, handle_action};
 pub use view::MoreViewComponent;
 
 pub struct MoreReducer;

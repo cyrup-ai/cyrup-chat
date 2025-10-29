@@ -5,6 +5,7 @@ use crate::view_model::StatusId;
 use crate::view_model::StatusViewModel;
 use id_tree::InsertBehavior::*;
 use id_tree::*;
+use surrealdb_types::ToSql;
 
 #[derive(Debug, Clone)]
 pub struct Conversation {
@@ -221,18 +222,18 @@ pub async fn build_conversation(model: &Model, status_id: String) -> Result<Conv
         // Find parent node ID from in_reply_to relationship
         let Some(reply_to) = message.in_reply_to.as_ref() else {
             // No reply_to means this is orphaned - skip
-            log::warn!("Orphaned message {} with no in_reply_to", message.id.0);
+            log::warn!("Orphaned message {:?} with no in_reply_to", message.id.0);
             continue;
         };
 
         let Some(parent_node_id) = ids.get(&reply_to.0) else {
-            log::error!("Could not resolve reply-to for message {}", message.id.0);
+            log::error!("Could not resolve reply-to for message {:?}", message.id.0);
             continue;
         };
 
         let view_model = message_to_status_view_model(message);
         let Ok(child_id) = tree.insert(Node::new(view_model), UnderNode(parent_node_id)) else {
-            log::error!("Could not insert message into tree {}", message.id.0);
+            log::error!("Could not insert message into tree {:?}", message.id.0);
             continue;
         };
 
@@ -254,7 +255,7 @@ pub fn message_to_status_view_model(msg: &crate::view_model::message::Message) -
 
     // Create synthetic account for message author
     let account = AccountViewModel {
-        id: AccountId(msg.conversation_id.0.clone()),
+        id: AccountId(msg.conversation_id.0.to_sql()),
         image: String::new(),
         image_header: String::new(),
         username: msg.author.clone(),
@@ -265,7 +266,7 @@ pub fn message_to_status_view_model(msg: &crate::view_model::message::Message) -
         note_html: Vec::new(),
         joined_human: String::new(),
         joined_full: String::new(),
-        joined: msg.timestamp,
+        joined: *msg.timestamp,
         url: String::new(),
         followers: 0,
         followers_str: String::from("0"),
@@ -283,11 +284,11 @@ pub fn message_to_status_view_model(msg: &crate::view_model::message::Message) -
     let (_, content_html) = clean_html(&msg.content);
 
     StatusViewModel {
-        id: StatusId(msg.id.0.clone()),
+        id: StatusId(msg.id.0.to_sql()),
         uri: String::new(),
         account,
         status_images: Vec::new(),
-        created: msg.timestamp,
+        created: *msg.timestamp,
         created_human: String::new(),
         created_full: String::new(),
         reblog_status: None,
@@ -297,7 +298,7 @@ pub fn message_to_status_view_model(msg: &crate::view_model::message::Message) -
         replies_title: String::new(),
         replies_count: 0,
         is_reply: msg.in_reply_to.is_some(),
-        in_reply_to_id: msg.in_reply_to.as_ref().map(|id| id.0.clone()),
+        in_reply_to_id: msg.in_reply_to.as_ref().map(|id| id.0.to_sql()),
         has_reblogged: false,
         is_reblog: false,
         reblog_count: 0,

@@ -4,27 +4,39 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use surrealdb_types::SurrealValue;
+use surrealdb_types::{RecordId, SurrealValue, ToSql};
 
 /// Agent template ID newtype wrapper following pattern from src/view_model/types.rs
-#[derive(Debug, Eq, PartialEq, Hash, Clone, Default, Serialize, Deserialize, SurrealValue)]
-pub struct AgentTemplateId(pub String);
+#[derive(Debug, Eq, PartialEq, Hash, Clone, Serialize, Deserialize, SurrealValue)]
+pub struct AgentTemplateId(pub RecordId);
+
+impl Default for AgentTemplateId {
+    fn default() -> Self {
+        AgentTemplateId(RecordId::new("agent_template", "default"))
+    }
+}
 
 impl std::fmt::Display for AgentTemplateId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("AgentTemplateID:{}", self.0))
+        write!(f, "{}", self.0.to_sql())
+    }
+}
+
+impl From<RecordId> for AgentTemplateId {
+    fn from(r: RecordId) -> Self {
+        AgentTemplateId(r)
     }
 }
 
 impl From<String> for AgentTemplateId {
     fn from(s: String) -> Self {
-        AgentTemplateId(s)
+        AgentTemplateId(RecordId::parse_simple(&s).unwrap_or_else(|_| RecordId::new("agent_template", s)))
     }
 }
 
 impl From<&str> for AgentTemplateId {
     fn from(s: &str) -> Self {
-        AgentTemplateId(s.to_string())
+        AgentTemplateId(RecordId::parse_simple(s).unwrap_or_else(|_| RecordId::new("agent_template", s)))
     }
 }
 
@@ -56,13 +68,13 @@ pub struct AgentTemplate {
 /// - Sonnet → "sonnet"
 /// - Haiku → "haiku"
 /// - Opus → "opus"
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, SurrealValue)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, SurrealValue, Default)]
 #[serde(rename_all = "lowercase")]
-#[derive(Default)]
+#[surreal(untagged, lowercase)]
 pub enum AgentModel {
     #[default]
     Sonnet, // Claude 3.5 Sonnet - balanced performance
-    Haiku, // Claude 3 Haiku - fast, lightweight
+    Haiku, // Claude 3.5 Haiku - fast, lightweight
     Opus,  // Claude 3 Opus - most capable
 }
 

@@ -15,6 +15,7 @@ use crate::app::context::use_environment;
 use crate::view_model::agent::{AgentModel, AgentTemplate, AgentTemplateId};
 use chrono::Utc;
 use dioxus::prelude::*;
+use surrealdb_types::ToSql;
 
 /// Main template manager component
 ///
@@ -116,7 +117,7 @@ pub fn TemplateManagerComponent() -> Element {
                 // Updating existing template
                 db.update_template(&template)
                     .await
-                    .map(|_| log::info!("Updated template: {}", template.id.0))
+                    .map(|_| log::info!("Updated template: {}", template.id.0.to_sql()))
             };
 
             if let Err(e) = result {
@@ -148,7 +149,7 @@ pub fn TemplateManagerComponent() -> Element {
         form_icon.set(template.icon.clone().unwrap_or_default());
         form_color.set(template.color.clone().unwrap_or_default());
 
-        editing_id.set(Some(template.id.0));
+        editing_id.set(Some(template.id.0.to_sql()));
     };
 
     // Delete handler

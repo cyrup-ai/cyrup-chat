@@ -13,6 +13,13 @@ pub use views::*;
 
 /// Main application entry point
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize logging FIRST so all subsequent log statements work
+    env_logger::Builder::from_default_env()
+        .filter_level(log::LevelFilter::Debug)
+        .init();
+    
+    log::info!("CYRUP Chat starting...");
+    
     // Initialize vault first
     tokio::runtime::Runtime::new()?.block_on(async { crate::auth::initialize_vault().await })?;
 

@@ -2,10 +2,13 @@
 
 pub mod async_file_dialog;
 pub mod async_platform;
+pub mod datetime;
 pub mod http_parser;
 pub mod id_generator;
 pub mod platform_api;
 pub mod scope_manager;
+
+pub use datetime::*;
 
 pub use id_generator::{
     generate_conversation_id, generate_session_id, generate_subscription_id, generate_timestamp_id,

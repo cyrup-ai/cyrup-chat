@@ -29,50 +29,18 @@ impl Database {
     /// * `emoji` - Emoji string (e.g., "👍", "❤️", "🎯")
     ///
     /// # Returns
-    /// * `Ok(String)` - Reaction ID (existing or newly created)
+    /// * `Ok(String)` - Reaction ID (newly created or existing if duplicate)
     /// * `Err(String)` - Error message if operation fails
     ///
     /// # Design Note
-    /// Prevents duplicate user+emoji combinations (idempotent operation)
+    /// Database enforces uniqueness via UNIQUE composite index.
+    /// Attempting to insert duplicate returns existing ID (idempotent).
     pub async fn add_reaction(
         &self,
         message_id: &str,
         user_id: &str,
         emoji: &str,
     ) -> Result<String, String> {
-        // Step 1: Check for existing reaction with same user+emoji
-        // Convert &str to String to satisfy 'static lifetime for async
-        let check_query = r"
-            SELECT id 
-            FROM type::thing('message', $message)<-message_id<-reaction
-            WHERE user_id = $user AND emoji = $emoji
-            LIMIT 1
-        ";
-
-        let mut check_response = self
-            .client()
-            .query(check_query)
-            .bind(("message", message_id.to_string()))
-            .bind(("user", user_id.to_string()))
-            .bind(("emoji", emoji.to_string()))
-            .await
-            .map_err(|e| format!("Failed to check existing reaction: {}", e))?;
-
-        #[derive(Deserialize, SurrealValue)]
-        struct ReactionId {
-            id: String,
-        }
-
-        let existing: Vec<ReactionId> = check_response
-            .take(0)
-            .map_err(|e| format!("Failed to parse reaction check: {}", e))?;
-
-        // If duplicate found, return existing ID
-        if let Some(existing_reaction) = existing.first() {
-            return Ok(existing_reaction.id.clone());
-        }
-
-        // Step 2: No duplicate - create new reaction
         #[derive(Serialize, SurrealValue)]
         struct ReactionInsert {
             message_id: String,
@@ -80,20 +48,63 @@ impl Database {
             emoji: String,
         }
 
-        let result: Option<Reaction> = self
+        // Attempt to create reaction
+        // Database will reject if duplicate (UNIQUE constraint violation)
+        let result = self
             .client()
-            .create("reaction")
+            .create::<Option<Reaction>>("reaction")
             .content(ReactionInsert {
                 message_id: message_id.to_string(),
                 user_id: user_id.to_string(),
                 emoji: emoji.to_string(),
             })
-            .await
-            .map_err(|e| format!("Failed to add reaction: {}", e))?;
+            .await;
 
-        result
-            .map(|r| r.id)
-            .ok_or_else(|| "Create returned empty result".to_string())
+        match result {
+            Ok(Some(reaction)) => {
+                // Success: new reaction created
+                Ok(reaction.id)
+            }
+            Ok(None) => {
+                // Unexpected: create returned None
+                Err("Create returned empty result".to_string())
+            }
+            Err(e) => {
+                // Check if error is duplicate constraint violation
+                let error_msg = e.to_string();
+                
+                if error_msg.contains("already exists") || error_msg.contains("unique") {
+                    // Database rejected duplicate - fetch existing
+                    let query = r"
+                        SELECT id FROM reaction
+                        WHERE message_id = type::record('message', $message)
+                          AND user_id = $user
+                          AND emoji = $emoji
+                        LIMIT 1
+                    ";
+                    
+                    let mut response = self.client()
+                        .query(query)
+                        .bind(("message", message_id.to_string()))
+                        .bind(("user", user_id.to_string()))
+                        .bind(("emoji", emoji.to_string()))
+                        .await
+                        .map_err(|e| format!("Failed to fetch existing: {}", e))?;
+
+                    #[derive(Deserialize, SurrealValue)]
+                    struct ReactionId { id: String }
+
+                    let existing: Vec<ReactionId> = response.take(0)
+                        .map_err(|e| format!("Failed to parse: {}", e))?;
+
+                    existing.first()
+                        .map(|r| r.id.clone())
+                        .ok_or_else(|| "Duplicate error but not found".to_string())
+                } else {
+                    Err(format!("Failed to add reaction: {}", error_msg))
+                }
+            }
+        }
     }
 
     /// Remove a reaction by ID
@@ -131,7 +142,7 @@ impl Database {
     ) -> Result<(), String> {
         let query = r"
             DELETE reaction 
-            WHERE message_id = $message 
+            WHERE message_id = type::record('message', $message)
               AND user_id = $user 
               AND emoji = $emoji
         ";
@@ -158,8 +169,9 @@ impl Database {
     pub async fn get_message_reactions(&self, message_id: &str) -> Result<Vec<Reaction>, String> {
         // Convert &str to String to satisfy 'static lifetime for async
         let query = r"
-            SELECT <-message_id<-reaction.*
-            FROM type::thing('message', $message)
+            SELECT *
+            FROM reaction
+            WHERE message_id = type::record('message', $message)
             ORDER BY created_at ASC
         ";
 
@@ -195,7 +207,8 @@ impl Database {
         // Convert &str to String to satisfy 'static lifetime for async
         let query = r"
             SELECT emoji, count() AS count
-            FROM type::thing('message', $message)<-message_id<-reaction
+            FROM reaction
+            WHERE message_id = type::record('message', $message)
             GROUP BY emoji
             ORDER BY count DESC
         ";

@@ -2,7 +2,6 @@ mod view;
 pub mod mention_input;
 
 pub use view::ChatComponent;
-pub use mention_input::MentionInput;
 
 use chrono::{DateTime, Local};
 

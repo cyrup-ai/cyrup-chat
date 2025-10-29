@@ -32,11 +32,10 @@ impl Platform {
             .map_err(|e| format!("Failed to get native window for toolbar setup: {}", e))?;
 
         unsafe {
-            let window_ptr = native_window as *mut AnyObject;
             let toolbar_ptr = &*toolbar.objc as *const _ as *mut AnyObject;
-            let () = msg_send![window_ptr, setToolbar: toolbar_ptr];
+            let () = msg_send![native_window, setToolbar: toolbar_ptr];
             let style: NSUInteger = WindowToolbarStyle::Unified.into();
-            let () = msg_send![window_ptr, setToolbarStyle: style];
+            let () = msg_send![native_window, setToolbarStyle: style];
         }
 
         *self.toolbar.borrow_mut() = ToolbarType::LoggedOut(toolbar);
@@ -123,9 +122,8 @@ impl Platform {
             .map_err(|e| format!("Failed to get native window for logout toolbar: {}", e))?;
 
         unsafe {
-            let window_ptr = native_window as *mut AnyObject;
             let toolbar_ptr = &*toolbar.objc as *const _ as *mut AnyObject;
-            let () = msg_send![window_ptr, setToolbar: toolbar_ptr];
+            let () = msg_send![native_window, setToolbar: toolbar_ptr];
         }
 
         *self.toolbar.borrow_mut() = ToolbarType::LoggedOut(toolbar);

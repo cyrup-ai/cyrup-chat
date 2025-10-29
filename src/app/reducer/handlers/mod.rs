@@ -44,6 +44,28 @@ pub fn handle_app_action(mut signal: Signal<AppState>, action: AppAction) -> Res
                 }
             });
         }
+        AppAction::MenuEvent(menu_event) => {
+            use crate::environment::types::MainMenuEvent;
+            
+            // Menu events that affect root state
+            log::debug!("Root received menu event: {:?}", menu_event);
+            
+            match menu_event {
+                MainMenuEvent::Logout => {
+                    // Trigger logout flow
+                    auth::handle_logout_requested(signal)?;
+                }
+                MainMenuEvent::NewPost => {
+                    // NewPost opens a window, handled by platform layer
+                    log::debug!("NewPost menu event - handled by platform");
+                }
+                _ => {
+                    // View navigation events (Timeline, Mentions, Messages, More) 
+                    // are handled by MainView component via platform.handle_menu_events()
+                    log::debug!("View navigation event - forwarded to MainView");
+                }
+            }
+        }
     }
 
     Ok(())

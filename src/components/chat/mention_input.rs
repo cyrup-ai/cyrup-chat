@@ -10,6 +10,7 @@
 use crate::environment::Environment;
 use crate::view_model::agent::AgentTemplate;
 use dioxus::prelude::*;
+use surrealdb_types::ToSql;
 
 #[component]
 pub fn MentionInput(
@@ -20,8 +21,8 @@ pub fn MentionInput(
 ) -> Element {
     let environment = use_context::<Environment>();
     let mut show_autocomplete = use_signal(|| false);
-    let mut autocomplete_options = use_signal(|| Vec::<AgentTemplate>::new());
-    let mut autocomplete_filter = use_signal(|| String::new());
+    let mut autocomplete_options = use_signal(Vec::<AgentTemplate>::new);
+    let mut autocomplete_filter = use_signal(String::new);
 
     // Load all agent templates once (filtered by room_agents)
     let templates = use_resource(move || {
@@ -41,9 +42,8 @@ pub fn MentionInput(
         if let Some(last_word_start) = text.rfind(|c: char| c.is_whitespace() || c == '@') {
             let last_word = &text[last_word_start..];
             
-            if last_word.starts_with('@') {
+            if let Some(filter) = last_word.strip_prefix('@') {
                 // Extract filter text after @
-                let filter = &last_word[1..];
                 autocomplete_filter.set(filter.to_string());
 
                 log::debug!("[MentionInput] Autocomplete filter: '{}'", filter);
@@ -114,14 +114,14 @@ pub fn MentionInput(
                     class: "absolute bottom-full mb-2 w-full bg-[#1a1a2e] border border-white/10 rounded-lg shadow-lg max-h-48 overflow-y-auto",
                     {options.iter().map(|agent| {
                         let agent_name = agent.name.clone();
-                        let agent_id = agent.id.0.clone();
-                        
+                        let agent_id = agent.id.0.to_sql();
+
                         rsx! {
                             div {
                                 key: "{agent_id}",
                                 class: "px-4 py-2 hover:bg-white/10 cursor-pointer transition-colors",
                                 onclick: move |_| select_agent(agent_name.clone()),
-                                
+
                                 div {
                                     class: "font-semibold text-white",
                                     "@{agent_name}"

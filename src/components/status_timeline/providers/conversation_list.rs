@@ -119,7 +119,7 @@ fn conversation_summary_to_status(
     Status {
         id: summary.id.0.clone(),
         uri: String::new(),
-        created_at: summary.last_message_timestamp,
+        created_at: *summary.last_message_timestamp,
         account: Account {
             id: summary.id.0.clone(),
             username: format!("conversation_{}", &summary.id.0[..8]),
@@ -132,7 +132,7 @@ fn conversation_summary_to_status(
             moved: None,
             suspended: None,
             limited: None,
-            created_at: summary.last_message_timestamp,
+            created_at: *summary.last_message_timestamp,
             followers_count: 0,
             following_count: 0,
             statuses_count: 0,

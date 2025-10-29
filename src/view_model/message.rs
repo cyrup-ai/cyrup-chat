@@ -3,29 +3,41 @@
 //! Aligns with src/database/schema.rs message table (lines 57-74)
 
 use super::conversation::ConversationId;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use surrealdb_types::SurrealValue;
+use surrealdb_types::{Datetime, RecordId, SurrealValue, ToSql};
 
 /// Message ID newtype wrapper
-#[derive(Debug, Eq, PartialEq, Hash, Clone, Default, Serialize, Deserialize, SurrealValue)]
-pub struct MessageId(pub String);
+#[derive(Debug, Eq, PartialEq, Hash, Clone, Serialize, Deserialize, SurrealValue)]
+pub struct MessageId(pub RecordId);
+
+impl Default for MessageId {
+    fn default() -> Self {
+        MessageId(RecordId::new("message", "default"))
+    }
+}
 
 impl std::fmt::Display for MessageId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("MessageID:{}", self.0))
+        write!(f, "{}", self.0.to_sql())
+    }
+}
+
+impl From<RecordId> for MessageId {
+    fn from(r: RecordId) -> Self {
+        MessageId(r)
     }
 }
 
 impl From<String> for MessageId {
     fn from(s: String) -> Self {
-        MessageId(s)
+        MessageId(RecordId::parse_simple(&s).unwrap_or_else(|_| RecordId::new("message", s)))
     }
 }
 
 impl From<&str> for MessageId {
     fn from(s: &str) -> Self {
-        MessageId(s.to_string())
+        MessageId(RecordId::parse_simple(s).unwrap_or_else(|_| RecordId::new("message", s)))
     }
 }
 
@@ -56,7 +68,7 @@ pub struct Message {
     pub author: String,
     pub author_type: AuthorType,
     pub content: String,
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: Datetime,
     pub in_reply_to: Option<MessageId>,
     pub message_type: MessageType,
     /// File paths to attachments (Q3 from MASTODON_ROSETTA_STONE.md)
@@ -113,7 +125,7 @@ impl Default for Message {
             author: String::new(),
             author_type: AuthorType::Human,
             content: String::new(),
-            timestamp: chrono::Utc::now(),
+            timestamp: Utc::now().into(),
             in_reply_to: None,
             message_type: MessageType::Normal,
             attachments: Vec::new(),

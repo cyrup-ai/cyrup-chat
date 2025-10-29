@@ -4,6 +4,7 @@
 
 use super::Database;
 use crate::view_model::agent::AgentTemplate;
+use surrealdb_types::ToSql;
 
 impl Database {
     /// Create a new agent template in the database
@@ -45,7 +46,7 @@ impl Database {
 
         // Extract ID from created record
         result
-            .map(|t| t.id.0)
+            .map(|t| t.id.0.to_sql())
             .ok_or_else(|| "Create returned empty result".to_string())
     }
 
@@ -138,9 +139,10 @@ impl Database {
         // .update() with content performs full record replacement
         // Clone template to satisfy 'static lifetime requirement for async
         let template_id = template.id.0.clone();
+        let template_id_str = template_id.to_sql();
         let updated: Option<AgentTemplate> = self
             .client()
-            .update(("agent_template", template_id.as_str()))
+            .update(("agent_template", template_id_str.as_str()))
             .content(template.clone())
             .await
             .map_err(|e| format!("Failed to update template: {}", e))?;
@@ -148,7 +150,7 @@ impl Database {
         // Validate that record existed and was updated
         updated
             .map(|_| ())
-            .ok_or_else(|| format!("Template not found: {}", template_id))
+            .ok_or_else(|| format!("Template not found: {}", template_id.to_sql()))
     }
 
     /// Delete an agent template by ID

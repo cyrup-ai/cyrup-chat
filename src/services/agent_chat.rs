@@ -31,32 +31,38 @@ pub fn get_tool_event_channel() -> &'static (Sender<String>, Receiver<String>) {
     TOOL_EVENT_CHANNEL.get_or_init(unbounded)
 }
 
-/// Send user message and stream agent response
+/// Send user message and stream agent response(s) - unified 1:N agent handler
 ///
 /// # Arguments
 /// * `database` - Database connection
 /// * `conversation_id` - Conversation ID
-/// * `user_message` - User message content
+/// * `user_message` - User message content (may contain @mentions for multi-agent)
+/// * `mentioned_agents` - Optional agent IDs to route to (empty = all participants)
 /// * `parent_message_id` - Optional parent message ID for threading
 ///
 /// # Errors
 /// Returns error if message cannot be sent or database operations fail
 ///
 /// # Architecture
+/// Single agent (participants.len() == 1):
 /// 1. INSERT user message to database
-/// 2. GET conversation (includes agent_session_id and template_id)
+/// 2. GET conversation (includes agent_sessions HashMap and participants Vec)
 /// 3. GET template for model/system_prompt/max_turns
-/// 4. CREATE fresh ClaudeSDKClient with resume: conversation.agent_session_id
-/// 5. Stream responses:
-///    - First text chunk: INSERT message → save message_id
-///    - Subsequent chunks: UPDATE message SET content = accumulated_text
-///    - LIVE QUERY subscribers receive Action::Update automatically
-/// 6. Extract session_id from Message::Result
-/// 7. Store via database.update_conversation_session() for next turn
-pub async fn send_chat_message(
+/// 4. CREATE ClaudeSDKClient with resume from agent_sessions[agent_id]
+/// 5. Stream responses with debouncing (100ms OR 50 chars)
+/// 6. Store session_id via update_agent_session()
+///
+/// Multi-agent (participants.len() > 1):
+/// 1. INSERT user message to database
+/// 2. Parse @mentions or use all participants
+/// 3. Spawn concurrent agent tasks using FuturesUnordered
+/// 4. Each agent streams independently with session persistence
+/// 5. All responses appear in unified timeline via LIVE QUERY
+pub async fn send_message(
     database: Arc<Database>,
     conversation_id: String,
     user_message: String,
+    mentioned_agents: Option<Vec<String>>,
     parent_message_id: Option<String>,
 ) -> Result<(), String> {
     // 1. Save user message to database
@@ -66,7 +72,7 @@ pub async fn send_chat_message(
         author: "User".to_string(),
         author_type: AuthorType::Human,
         content: user_message.clone(),
-        timestamp: chrono::Utc::now(),
+        timestamp: chrono::Utc::now().into(),
         in_reply_to: parent_message_id.map(MessageId),
         message_type: MessageType::Normal,
         attachments: Vec::new(),
@@ -77,11 +83,74 @@ pub async fn send_chat_message(
 
     let user_msg_id = database.insert_message(&user_msg).await?;
 
-    // 2. Get conversation (has template_id and agent_session_id)
+    // 2. Get conversation (has participants and agent_sessions)
     let conversation = database.get_conversation(&conversation_id).await?;
-    let template = database.get_template(&conversation.template_id.0).await?;
 
-    // 3. Create ClaudeSDKClient (fresh subprocess each time)
+    // 3. Determine which agents to message
+    let target_agents: Vec<String> = if let Some(agents) = mentioned_agents {
+        // Multi-agent: Use @mentioned agents
+        agents
+    } else if conversation.participants.len() == 1 {
+        // Single-agent: Use the one participant
+        vec![conversation.participants[0].0.clone()]
+    } else {
+        // Multi-agent without mentions: Message all participants
+        conversation.participants.iter().map(|p| p.0.clone()).collect()
+    };
+
+    // Validate target_agents not empty (follows pattern from notifications/content.rs:28)
+    if target_agents.is_empty() {
+        return Err("No target agents specified".to_string());
+    }
+
+    log::info!(
+        "[Chat] Sending message to conversation {} with {} target agent(s)",
+        conversation_id,
+        target_agents.len()
+    );
+
+    // 4. Execute based on agent count
+    if target_agents.len() == 1 {
+        // Single agent path: Direct execution with session persistence
+        let agent_id = &target_agents[0];
+        send_to_single_agent(
+            database,
+            conversation_id,
+            user_message,
+            user_msg_id,
+            agent_id,
+            conversation.agent_sessions.get(agent_id).cloned(),
+        )
+        .await
+    } else {
+        // Multi-agent path: Concurrent execution with FuturesUnordered
+        send_to_multiple_agents(
+            database,
+            conversation_id,
+            user_message,
+            user_msg_id,
+            target_agents,
+            conversation.agent_sessions,
+        )
+        .await
+    }
+}
+
+/// Single agent message handler with session persistence
+async fn send_to_single_agent(
+    database: Arc<Database>,
+    conversation_id: String,
+    user_message: String,
+    user_msg_id: String,
+    agent_id: &str,
+    existing_session_id: Option<String>,
+) -> Result<(), String> {
+    log::debug!("[Chat] Single agent mode: {}", agent_id);
+
+    // Get agent template
+    let template = database.get_template(agent_id).await?;
+
+    // Create ClaudeSDKClient (fresh subprocess each time)
     let options = ClaudeAgentOptions {
         model: Some(template.model.to_string().to_lowercase()),
         system_prompt: Some(SystemPrompt::String(template.system_prompt.clone())),
@@ -99,8 +168,7 @@ pub async fn send_chat_message(
             "WebSearch".into(), // Search the web
         ],
         // Resume from previous session if exists (lazy spawn pattern)
-        resume: conversation
-            .agent_session_id
+        resume: existing_session_id
             .as_ref()
             .map(|id| kodegen_tools_claude_agent::types::identifiers::SessionId::from(id.as_str())),
         ..Default::default()
@@ -110,102 +178,58 @@ pub async fn send_chat_message(
         .await
         .map_err(|e| format!("Failed to create Claude client: {}", e))?;
 
-    // 4. Send message
+    // Send message
     client
         .send_message(&user_message)
         .await
         .map_err(|e| format!("Failed to send to agent: {}", e))?;
 
-    // 5. Stream responses
-    stream_agent_responses(client, database, conversation_id, user_msg_id).await
+    // Stream responses
+    stream_agent_responses(
+        client,
+        database,
+        conversation_id,
+        user_msg_id,
+        agent_id.to_string(),
+    )
+    .await
 }
 
-/// Send message to multiple agents concurrently (multi-agent room routing)
-///
-/// # Arguments
-/// * `database` - Database connection
-/// * `room_id` - Room ID (used as conversation_id for messages)
-/// * `user_message` - User message content (may contain @mentions)
-/// * `mentioned_agents` - Agent template IDs to route message to (from mention_parser)
-///
-/// # Returns
-/// * `Ok(())` - All agent responses streamed successfully
-/// * `Err(String)` - Error if user message save fails (agent errors logged but don't fail)
-///
-/// # Architecture
-/// 1. Save user message to database (conversation_id = room_id)
-/// 2. Spawn concurrent agent tasks using FuturesUnordered
-/// 3. Each agent:
-///    - Loads template (model, system_prompt, max_turns)
-///    - Creates fresh ClaudeSDKClient (no resume)
-///    - Streams responses using stream_agent_responses()
-/// 4. All agents run concurrently, responses appear in room timeline
-///
-/// # Streaming Pattern
-/// - Uses existing stream_agent_responses() helper (lines 127-250)
-/// - Debouncing: 100ms interval OR 50 chars (lines 135-136)
-/// - LIVE QUERY: Database updates trigger UI refresh automatically
-///
-/// # Error Handling
-/// - User message save failure → return Err (critical)
-/// - Individual agent failures → log error, continue with other agents (non-critical)
-pub async fn send_room_message(
+/// Multi-agent message handler with concurrent execution
+async fn send_to_multiple_agents(
     database: Arc<Database>,
-    room_id: String,
+    conversation_id: String,
     user_message: String,
-    mentioned_agents: Vec<String>,  // Agent template IDs from @mentions
+    user_msg_id: String,
+    target_agents: Vec<String>,
+    agent_sessions: std::collections::HashMap<String, String>,
 ) -> Result<(), String> {
     log::info!(
-        "[RoomChat] Sending message to room {} with {} mentioned agents",
-        room_id,
-        mentioned_agents.len()
+        "[Chat] Multi-agent mode: {} agents",
+        target_agents.len()
     );
 
-    // 1. Save user message to database
-    // Note: Rooms use same message table as conversations (conversation_id field)
-    let user_msg = Message {
-        id: MessageId::default(),  // DB generates actual ID
-        conversation_id: ConversationId(room_id.clone()),
-        author: "User".to_string(),
-        author_type: AuthorType::Human,
-        content: user_message.clone(),
-        timestamp: chrono::Utc::now(),
-        in_reply_to: None,
-        message_type: MessageType::Normal,
-        attachments: Vec::new(),
-        unread: false,  // User's own messages start as read
-        deleted: false,
-        pinned: false,
-    };
-
-    let user_msg_id = database
-        .insert_message(&user_msg)
-        .await
-        .map_err(|e| format!("Failed to save user message: {}", e))?;
-
-    log::debug!("[RoomChat] Saved user message: {}", user_msg_id);
-
-    // 2. Spawn concurrent agent tasks
+    // Spawn concurrent agent tasks
     let mut agent_tasks = FuturesUnordered::new();
 
-    for agent_id in mentioned_agents {
+    for agent_id in target_agents {
         let database = database.clone();
-        let room_id = room_id.clone();
+        let conversation_id = conversation_id.clone();
         let user_message = user_message.clone();
         let user_msg_id = user_msg_id.clone();
+        let existing_session_id = agent_sessions.get(&agent_id).cloned();
 
         agent_tasks.push(async move {
-            log::info!("[RoomChat] Spawning agent: {}", agent_id);
+            log::info!("[Chat] Spawning agent: {}", agent_id);
 
-            // Get agent template (model, system_prompt, max_turns)
+            // Get agent template
             let template = database.get_template(&agent_id).await?;
 
-            // Create fresh ClaudeSDKClient for this agent
+            // Create ClaudeSDKClient
             let options = ClaudeAgentOptions {
                 model: Some(template.model.to_string().to_lowercase()),
                 system_prompt: Some(SystemPrompt::String(template.system_prompt.clone())),
                 max_turns: Some(template.max_turns),
-                // Enable core development tools
                 allowed_tools: vec![
                     "Read".into(),
                     "Write".into(),
@@ -217,7 +241,10 @@ pub async fn send_room_message(
                     "WebFetch".into(),
                     "WebSearch".into(),
                 ],
-                resume: None,  // Fresh session for each room message (no state retention)
+                // Resume from previous session if exists
+                resume: existing_session_id
+                    .as_ref()
+                    .map(|id| kodegen_tools_claude_agent::types::identifiers::SessionId::from(id.as_str())),
                 ..Default::default()
             };
 
@@ -225,31 +252,67 @@ pub async fn send_room_message(
                 .await
                 .map_err(|e| format!("Failed to create Claude client for {}: {}", agent_id, e))?;
 
-            log::debug!("[RoomChat] Sending message to agent {}", agent_id);
+            log::debug!("[Chat] Sending message to agent {}", agent_id);
 
-            // Send message to agent
+            // Send message
             client
                 .send_message(&user_message)
                 .await
                 .map_err(|e| format!("Failed to send to agent {}: {}", agent_id, e))?;
 
-            // Stream responses using existing helper
-            // This handles: INSERT first chunk → UPDATE subsequent chunks → LIVE QUERY
-            stream_agent_responses(client, database, room_id, user_msg_id).await
+            // Stream responses
+            stream_agent_responses(
+                client,
+                database,
+                conversation_id,
+                user_msg_id,
+                agent_id.clone(),
+            )
+            .await
         });
     }
 
-    // 3. Wait for all agents to complete (concurrent execution)
+    // Track success/failure counts
+    let mut success_count = 0;
+    let mut failure_count = 0;
+    let mut last_error: Option<String> = None;
+
+    // Wait for all agents to complete (concurrent execution)
     while let Some(result) = agent_tasks.next().await {
-        if let Err(e) = result {
-            // Log error but continue with other agents
-            log::error!("[RoomChat] Agent error: {}", e);
+        match result {
+            Ok(_) => {
+                success_count += 1;
+                log::debug!("[Chat] Agent completed successfully");
+            }
+            Err(e) => {
+                failure_count += 1;
+                last_error = Some(e.clone());
+                log::error!("[Chat] Agent error: {}", e);
+            }
         }
     }
 
-    log::info!("[RoomChat] All agents completed");
+    // Return error if ALL agents failed (total failure)
+    if success_count == 0 && failure_count > 0 {
+        let error_msg = format!(
+            "All {} agents failed to respond. Last error: {}",
+            failure_count,
+            last_error.unwrap_or_else(|| "Unknown".to_string())
+        );
+
+        log::error!("[Chat] {}", error_msg);
+        return Err(error_msg);
+    }
+
+    log::info!(
+        "[Chat] Multi-agent completion: {} succeeded, {} failed",
+        success_count,
+        failure_count
+    );
+
     Ok(())
 }
+
 
 /// Stream agent responses and update database
 ///
@@ -260,6 +323,7 @@ async fn stream_agent_responses(
     database: Arc<Database>,
     conversation_id: String,
     user_msg_id: String,
+    agent_id: String,
 ) -> Result<(), String> {
     let mut accumulated_text = String::new();
     let mut message_id: Option<String> = None;
@@ -307,7 +371,7 @@ async fn stream_agent_responses(
                                         author: "Assistant".to_string(),
                                         author_type: AuthorType::Agent,
                                         content: accumulated_text.clone(),
-                                        timestamp: chrono::Utc::now(),
+                                        timestamp: chrono::Utc::now().into(),
                                         in_reply_to: Some(MessageId(user_msg_id.clone())),
                                         message_type: MessageType::Normal,
                                         attachments: Vec::new(),
@@ -393,22 +457,21 @@ async fn stream_agent_responses(
                 ..
             }) => {
                 // IMPORTANT: Flush any pending updates before completing
-                if let Some(id) = message_id.as_ref() {
-                    if chars_since_last_update > 0 {
-                        match database
-                            .update_message_content(id, accumulated_text.clone())
-                            .await
-                        {
-                            Ok(_) => {
-                                log::debug!(
-                                    "[AgentChat] Flushed final update with {} chars",
-                                    accumulated_text.len()
-                                );
-                            }
-                            Err(e) => {
-                                log::error!("[AgentChat] Failed to flush final update: {}", e);
-                                return Err(e);
-                            }
+                if let Some(id) = message_id.as_ref()
+                    && chars_since_last_update > 0 {
+                    match database
+                        .update_message_content(id, accumulated_text.clone())
+                        .await
+                    {
+                        Ok(_) => {
+                            log::debug!(
+                                "[AgentChat] Flushed final update with {} chars",
+                                accumulated_text.len()
+                            );
+                        }
+                        Err(e) => {
+                            log::error!("[AgentChat] Failed to flush final update: {}", e);
+                            return Err(e);
                         }
                     }
                 }
@@ -428,7 +491,7 @@ async fn stream_agent_responses(
                         author: "system".to_string(),
                         author_type: AuthorType::System,
                         content: format!("⚠️ Agent Error: {}", error_text),
-                        timestamp: chrono::Utc::now(),
+                        timestamp: chrono::Utc::now().into(),
                         in_reply_to: None,
                         message_type: MessageType::Error,
                         attachments: Vec::new(),
@@ -458,7 +521,7 @@ async fn stream_agent_responses(
                     author: "system".to_string(),
                     author_type: AuthorType::System,
                     content: format!("⚠️ Stream error: {}", e),
-                    timestamp: chrono::Utc::now(),
+                    timestamp: chrono::Utc::now().into(),
                     in_reply_to: None,
                     message_type: MessageType::Error,
                     attachments: Vec::new(),
@@ -479,9 +542,9 @@ async fn stream_agent_responses(
 
     // Store session_id for next turn (lazy spawn pattern)
     if let Some(sid) = session_id {
-        log::info!("[AgentChat] Storing session_id for next turn: {}", sid);
+        log::info!("[Chat] Storing session_id for agent {} in conversation {}", agent_id, conversation_id);
         database
-            .update_conversation_session(&conversation_id, &sid)
+            .update_agent_session(&conversation_id, &agent_id, &sid)
             .await?;
     }
 

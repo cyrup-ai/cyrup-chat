@@ -7,7 +7,6 @@ pub mod loggedin;
 pub mod login;
 pub mod more;
 pub mod post;
-pub mod room;
 pub mod shader_background;
 pub mod sidebar;
 pub mod status_timeline;

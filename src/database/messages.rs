@@ -9,7 +9,8 @@ use super::Database;
 use crate::view_model::message::{AuthorType, Message, MessageType};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use surrealdb_types::SurrealValue;
+use surrealdb::types::RecordId;
+use surrealdb_types::{SurrealValue, ToSql};
 
 impl Database {
     /// Insert a new message and update conversation timestamp
@@ -31,12 +32,12 @@ impl Database {
         // Serialize message fields for database insertion
         #[derive(Serialize, SurrealValue)]
         struct MessageInsert {
-            conversation_id: String,
+            conversation_id: RecordId,
             author: String,
             author_type: String,
             content: String,
             timestamp: DateTime<Utc>,
-            in_reply_to: Option<String>,
+            in_reply_to: Option<RecordId>,
             message_type: String,
             attachments: Vec<String>,
             unread: bool,
@@ -54,7 +55,7 @@ impl Database {
                 AuthorType::Tool => "tool".to_string(),
             },
             content: message.content.clone(),
-            timestamp: message.timestamp,
+            timestamp: *message.timestamp,
             in_reply_to: message.in_reply_to.as_ref().map(|id| id.0.clone()),
             message_type: match message.message_type {
                 MessageType::Normal => "normal".to_string(),
@@ -86,17 +87,17 @@ impl Database {
         let update_query = r"
             UPDATE conversation 
             SET last_message_at = $timestamp 
-            WHERE id = $conversation_id
+            WHERE id = type::record('conversation', $conversation_id)
         ";
 
         self.client()
             .query(update_query)
-            .bind(("conversation_id", message.conversation_id.0.clone()))
+            .bind(("conversation_id", message.conversation_id.0.to_sql()))
             .bind(("timestamp", message.timestamp))
             .await
             .map_err(|e| format!("Failed to update conversation timestamp: {}", e))?;
 
-        Ok(message_id)
+        Ok(message_id.to_sql())
     }
 
     /// Get recent messages for agent context window
@@ -119,9 +120,10 @@ impl Database {
         // Build query with dynamic limit
         let query = format!(
             r#"
-            SELECT <-conversation_id<-message.*
-            FROM conversation:$conversation_id
-            WHERE deleted = false
+            SELECT *
+            FROM message
+            WHERE conversation_id = type::record('conversation', $conversation_id)
+              AND deleted = false
             ORDER BY timestamp ASC
             LIMIT {}
             "#,
@@ -157,9 +159,10 @@ impl Database {
     pub async fn get_all_messages(&self, conversation_id: &str) -> Result<Vec<Message>, String> {
         // Convert &str to String to satisfy 'static lifetime for async
         let query = r"
-            SELECT <-conversation_id<-message.*
-            FROM conversation:$conversation_id
-            WHERE deleted = false
+            SELECT *
+            FROM message
+            WHERE conversation_id = type::record('conversation', $conversation_id)
+              AND deleted = false
             ORDER BY timestamp ASC
         ";
 
@@ -197,9 +200,10 @@ impl Database {
     ) -> Result<Vec<Message>, String> {
         // Convert &str to String to satisfy 'static lifetime for async
         let query = r"
-            SELECT <-conversation_id<-message.*
-            FROM conversation:$conversation_id
-            WHERE content CONTAINS $search_term
+            SELECT *
+            FROM message
+            WHERE conversation_id = type::record('conversation', $conversation_id)
+              AND content CONTAINS $search_term
               AND deleted = false
             ORDER BY timestamp ASC
         ";
@@ -236,7 +240,7 @@ impl Database {
         let query = r"
             UPDATE message
             SET unread = false
-            WHERE conversation_id = $conversation_id
+            WHERE conversation_id = type::record('conversation', $conversation_id)
         ";
 
         self.client()
@@ -262,8 +266,11 @@ impl Database {
     pub async fn get_unread_count(&self, conversation_id: &str) -> Result<u32, String> {
         // Convert &str to String to satisfy 'static lifetime for async
         let query = r"
-            SELECT count(<-conversation_id<-message WHERE unread = true AND deleted = false) AS count
-            FROM conversation:$conversation_id
+            SELECT count() AS count
+            FROM message
+            WHERE conversation_id = type::record('conversation', $conversation_id)
+              AND unread = true
+              AND deleted = false
         ";
 
         let mut response = self
@@ -302,7 +309,7 @@ impl Database {
         let query = r"
             UPDATE message
             SET deleted = true
-            WHERE id = $message_id
+            WHERE id = type::record('message', $message_id)
         ";
 
         self.client()
@@ -337,7 +344,7 @@ impl Database {
         let current_query = r"
             SELECT pinned
             FROM message
-            WHERE id = $message_id
+            WHERE id = type::record('message', $message_id)
         ";
 
         let mut current_response = self
@@ -364,8 +371,10 @@ impl Database {
         // If trying to pin (currently unpinned), check pin limit
         if !currently_pinned {
             let count_query = r"
-                SELECT count(<-conversation_id<-message WHERE pinned = true) AS count
-                FROM conversation:$conversation_id
+                SELECT count() AS count
+                FROM message
+                WHERE conversation_id = type::record('conversation', $conversation_id)
+                  AND pinned = true
             ";
 
             let mut count_response = self
@@ -396,7 +405,7 @@ impl Database {
         let update_query = r"
             UPDATE message
             SET pinned = $pinned
-            WHERE id = $message_id
+            WHERE id = type::record('message', $message_id)
         ";
 
         self.client()
@@ -424,9 +433,10 @@ impl Database {
     pub async fn get_pinned_messages(&self, conversation_id: &str) -> Result<Vec<Message>, String> {
         // Convert &str to String to satisfy 'static lifetime for async
         let query = r"
-            SELECT <-conversation_id<-message.*
-            FROM conversation:$conversation_id
-            WHERE pinned = true
+            SELECT *
+            FROM message
+            WHERE conversation_id = type::record('conversation', $conversation_id)
+              AND pinned = true
               AND deleted = false
             ORDER BY timestamp ASC
         ";
@@ -493,7 +503,7 @@ impl Database {
         let query = r"
             SELECT *
             FROM message
-            WHERE id = $message_id
+            WHERE id = type::record('message', $message_id)
             LIMIT 1
         ";
 
@@ -527,7 +537,8 @@ impl Database {
 
         // Use toggle if not already pinned
         if !message.pinned {
-            self.toggle_pin_message(message_id, &message.conversation_id.0)
+            let conv_id = message.conversation_id.0.to_sql();
+            self.toggle_pin_message(message_id, &conv_id)
                 .await?;
         }
 
@@ -547,7 +558,7 @@ impl Database {
         let query = r"
             UPDATE message
             SET pinned = false
-            WHERE id = $message_id
+            WHERE id = type::record('message', $message_id)
         ";
 
         self.client()
@@ -608,7 +619,7 @@ impl Database {
     /// Updates all messages where conversation_id matches and unread=true,
     /// setting unread=false. This clears unread count for the conversation.
     pub async fn mark_messages_as_read(&self, conversation_id: String) -> Result<(), String> {
-        let query = "UPDATE message SET unread = false WHERE conversation_id = $id AND unread = true";
+        let query = "UPDATE message SET unread = false WHERE conversation_id = type::record('conversation', $id) AND unread = true";
 
         self.client()
             .query(query)
