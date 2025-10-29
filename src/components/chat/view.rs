@@ -4,7 +4,7 @@ use crate::constants::ui_text;
 use crate::environment::Environment;
 use crate::services::{agent_chat, mention_parser};
 use crate::view_model::agent::{AgentModel, AgentTemplate, AgentTemplateId};
-use crate::view_model::conversation::{Conversation, ConversationId};
+use crate::view_model::conversation::Conversation;
 
 use crate::widgets::ErrorBox;
 use dioxus::prelude::*;
@@ -151,9 +151,9 @@ pub fn ChatComponent() -> Element {
                         // Create conversation
                         let now = chrono::Utc::now();
                         let conversation = Conversation {
-                            id: ConversationId(current_id.clone()),
+                            id: current_id.clone().into(),
                             title: "Chat with CYRUP".to_string(),
-                            participants: vec![AgentTemplateId(template_id)],
+                            participants: vec![template_id.into()],
                             summary: "General conversation with AI assistant".to_string(),
                             agent_sessions: std::collections::HashMap::new(), // Lazy spawn on first message
                             last_summarized_message_id: None,
@@ -275,7 +275,7 @@ pub fn ChatComponent() -> Element {
                                     // Message deleted - remove from list
                                     log::debug!("[Chat] LIVE QUERY: Message deleted - {}", message_data.id.0.to_sql());
                                     let mut msgs = messages.write();
-                                    msgs.retain(|m| m.id != message_data.id.0);
+                                    msgs.retain(|m| m.id != message_data.id.0.to_sql());
                                 }
                                 _ => {}
                             }
@@ -397,7 +397,7 @@ pub fn ChatComponent() -> Element {
                     Ok(messages) => {
                         let ids: HashSet<String> = messages
                             .into_iter()
-                            .map(|msg| msg.id.0)
+                            .map(|msg| msg.id.0.to_sql())
                             .collect();
                         bookmarked_msg_ids.set(ids);
                         log::debug!("[Chat] Loaded {} bookmarked messages", bookmarked_msg_ids.read().len());
@@ -636,7 +636,7 @@ pub fn ChatComponent() -> Element {
                 
                 let room_agents = conversation_for_input.read().as_ref()
                     .and_then(|opt| opt.as_ref())
-                    .map(|conv| conv.participants.iter().map(|p| p.0.clone()).collect::<Vec<String>>())
+                    .map(|conv| conv.participants.iter().map(|p| p.0.to_sql()).collect::<Vec<String>>())
                     .unwrap_or_default();
                 
                 if is_multi_agent {

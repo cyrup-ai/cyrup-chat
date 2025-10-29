@@ -7,9 +7,9 @@
 //! - LIVE QUERY subscribers receive Action::Update automatically
 
 use crate::database::Database;
-use crate::view_model::conversation::ConversationId;
 use crate::view_model::message::{AuthorType, Message, MessageId, MessageType};
 use flume::{Receiver, Sender, unbounded};
+use surrealdb_types::ToSql;
 use futures_util::stream::{FuturesUnordered, StreamExt};  // For concurrent agent execution
 use kodegen_tools_claude_agent::{
     ClaudeAgentOptions, ClaudeSDKClient, ContentBlock, Message as AgentMessage, SystemPrompt,
@@ -68,12 +68,12 @@ pub async fn send_message(
     // 1. Save user message to database
     let user_msg = Message {
         id: MessageId::default(), // DB generates actual ID
-        conversation_id: ConversationId(conversation_id.clone()),
+        conversation_id: conversation_id.clone().into(),
         author: "User".to_string(),
         author_type: AuthorType::Human,
         content: user_message.clone(),
         timestamp: chrono::Utc::now().into(),
-        in_reply_to: parent_message_id.map(MessageId),
+        in_reply_to: parent_message_id.map(MessageId::from),
         message_type: MessageType::Normal,
         attachments: Vec::new(),
         unread: false, // User's own messages start as read
@@ -92,10 +92,10 @@ pub async fn send_message(
         agents
     } else if conversation.participants.len() == 1 {
         // Single-agent: Use the one participant
-        vec![conversation.participants[0].0.clone()]
+        vec![conversation.participants[0].0.to_sql()]
     } else {
         // Multi-agent without mentions: Message all participants
-        conversation.participants.iter().map(|p| p.0.clone()).collect()
+        conversation.participants.iter().map(|p| p.0.to_sql()).collect()
     };
 
     // Validate target_agents not empty (follows pattern from notifications/content.rs:28)
@@ -367,12 +367,12 @@ async fn stream_agent_responses(
                                 if message_id.is_none() {
                                     let msg = Message {
                                         id: MessageId::default(),
-                                        conversation_id: ConversationId(conversation_id.clone()),
+                                        conversation_id: conversation_id.clone().into(),
                                         author: "Assistant".to_string(),
                                         author_type: AuthorType::Agent,
                                         content: accumulated_text.clone(),
                                         timestamp: chrono::Utc::now().into(),
-                                        in_reply_to: Some(MessageId(user_msg_id.clone())),
+                                        in_reply_to: Some(user_msg_id.clone().into()),
                                         message_type: MessageType::Normal,
                                         attachments: Vec::new(),
                                         unread: true,
@@ -487,7 +487,7 @@ async fn stream_agent_responses(
                     // Save error message
                     let error_msg = Message {
                         id: MessageId::default(),
-                        conversation_id: ConversationId(conversation_id.clone()),
+                        conversation_id: conversation_id.clone().into(),
                         author: "system".to_string(),
                         author_type: AuthorType::System,
                         content: format!("⚠️ Agent Error: {}", error_text),
@@ -517,7 +517,7 @@ async fn stream_agent_responses(
 
                 let error_msg = Message {
                     id: MessageId::default(),
-                    conversation_id: ConversationId(conversation_id.clone()),
+                    conversation_id: conversation_id.clone().into(),
                     author: "system".to_string(),
                     author_type: AuthorType::System,
                     content: format!("⚠️ Stream error: {}", e),

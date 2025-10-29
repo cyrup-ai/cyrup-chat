@@ -5694,7 +5694,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kodegen_mcp_client"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5710,7 +5710,7 @@ dependencies = [
 
 [[package]]
 name = "kodegen_mcp_schema"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "schemars",
  "serde",
@@ -5719,7 +5719,7 @@ dependencies = [
 
 [[package]]
 name = "kodegen_mcp_server_core"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "anyhow",
  "axum-server",
@@ -5740,7 +5740,7 @@ dependencies = [
 
 [[package]]
 name = "kodegen_mcp_tool"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5757,7 +5757,7 @@ dependencies = [
 
 [[package]]
 name = "kodegen_tools_claude_agent"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -5785,7 +5785,7 @@ dependencies = [
 
 [[package]]
 name = "kodegen_tools_config"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "anyhow",
  "axum-server",
@@ -5821,7 +5821,7 @@ dependencies = [
 
 [[package]]
 name = "kodegen_tools_prompt"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "anyhow",
  "dirs",
@@ -5840,7 +5840,7 @@ dependencies = [
 
 [[package]]
 name = "kodegen_utils"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "chrono",
  "dirs",

@@ -8,6 +8,7 @@ use crate::{
 use dioxus::prelude::{ReadableExt, WritableExt};
 use futures_util::Future;
 use std::pin::Pin;
+use surrealdb_types::ToSql;
 
 /// Provider that loads conversation list from database
 pub struct ConversationListProvider {
@@ -117,13 +118,13 @@ fn conversation_summary_to_status(
     use megalodon::entities::{Account, StatusVisibility};
 
     Status {
-        id: summary.id.0.clone(),
+        id: summary.id.0.to_sql(),
         uri: String::new(),
         created_at: *summary.last_message_timestamp,
         account: Account {
-            id: summary.id.0.clone(),
-            username: format!("conversation_{}", &summary.id.0[..8]),
-            acct: format!("conversation_{}", &summary.id.0[..8]),
+            id: summary.id.0.to_sql(),
+            username: format!("conversation_{}", &summary.id.0.to_sql()[..8]),
+            acct: format!("conversation_{}", &summary.id.0.to_sql()[..8]),
             display_name: summary.title.clone(),
             locked: false,
             discoverable: None,

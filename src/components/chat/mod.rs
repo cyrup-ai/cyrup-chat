@@ -4,6 +4,7 @@ pub mod mention_input;
 pub use view::ChatComponent;
 
 use chrono::{DateTime, Local};
+use surrealdb_types::ToSql;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChatMessage {
@@ -57,11 +58,11 @@ impl ChatMessage {
             .unwrap_or_else(chrono::Local::now);
 
         Self {
-            id: msg.id.0, // Use database ID, not random UUID
+            id: msg.id.0.to_sql(), // Use database ID, not random UUID
             sender,
             content: msg.content,
             timestamp: local_timestamp,
-            in_reply_to: msg.in_reply_to.as_ref().map(|id| id.0.clone()),
+            in_reply_to: msg.in_reply_to.as_ref().map(|id| id.0.to_sql()),
             reply_to_author: None,  // Will be populated when loading thread context
             pinned: msg.pinned,
             reactions: Vec::new(),  // Populated separately via LIVE QUERY

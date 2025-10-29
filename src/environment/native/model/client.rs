@@ -103,11 +103,12 @@ impl Model {
 
             // For single-agent conversations, spawn the one participant
             let agent_id = &conversation.participants[0].0;
+            let agent_id_str = agent_id.to_sql();
 
             // Get agent template from database
             let template = self
                 .database()
-                .get_template(agent_id)
+                .get_template(&agent_id_str)
                 .await
                 .map_err(|e| ModelError::QueryFailed(format!("Failed to get template: {}", e)))?;
 
@@ -138,7 +139,7 @@ impl Model {
 
             // Update conversation with session_id for this agent
             self.database()
-                .update_agent_session(conversation_id, agent_id, &session_id)
+                .update_agent_session(conversation_id, &agent_id_str, &session_id)
                 .await
                 .map_err(|e| ModelError::QueryFailed(format!("Failed to update session: {}", e)))?;
         }
@@ -151,8 +152,8 @@ impl Model {
 
         // Save user message to database
         let user_message = Message {
-            id: MessageId(uuid::Uuid::new_v4().to_string()),
-            conversation_id: ConversationId(conversation_id.to_string()),
+            id: MessageId(surrealdb_types::RecordId::new("message", uuid::Uuid::new_v4().to_string())),
+            conversation_id: ConversationId::from(conversation_id),
             author: "David Maple".to_string(), // Q39: Hardcoded user for MVP
             author_type: AuthorType::Human,
             content: message.to_string(),
@@ -204,7 +205,8 @@ impl Model {
         let message = self.single_status(message_id).await?;
 
         // Then get all messages in that conversation
-        self.get_messages(&message.conversation_id.0).await
+        let conv_id_str = message.conversation_id.0.to_sql();
+        self.get_messages(&conv_id_str).await
     }
 
     /// Add reaction to message (Q12: Keep reactions for ML feedback)
@@ -498,16 +500,17 @@ impl Model {
             tokio::spawn(async move {
                 let mut last_offset: i64 = 0;
                 let poll_interval = std::time::Duration::from_secs(2);
+                let conv_id_str = conv_id.to_sql();
 
                 loop {
                     // Poll for new messages from agent session
                     let response = match agent_manager
-                        .get_session_output(&conv_id, last_offset, 100)
+                        .get_session_output(&conv_id_str, last_offset, 100)
                         .await
                     {
                         Ok(resp) => resp,
                         Err(e) => {
-                            log::error!("Stream error for conversation {}: {}", conv_id.to_sql(), e);
+                            log::error!("Stream error for conversation {}: {}", conv_id_str, e);
                             break; // Exit loop on error
                         }
                     };
@@ -516,17 +519,17 @@ impl Model {
                     for serialized_msg in response.output {
                         // Convert SerializedMessage to Message and invoke callback
                         if let Some(message) =
-                            convert_serialized_to_message(&serialized_msg, &conv_id)
+                            convert_serialized_to_message(&serialized_msg, &conv_id_str)
                         {
                             log::debug!(
                                 "Stream message in {}: {} (type: {})",
-                                conv_id.to_sql(),
+                                conv_id_str,
                                 &message.content[..message.content.len().min(50)],
                                 serialized_msg.message_type
                             );
 
                             // Create Conversation entity for streaming
-                            let conversation_entity = create_conversation_entity(&conv_id, message);
+                            let conversation_entity = create_conversation_entity(&conv_id_str, message);
 
                             // Invoke callback with Message::Conversation
                             callback(megalodon::streaming::Message::Conversation(
@@ -542,7 +545,7 @@ impl Model {
                     if response.is_complete {
                         log::info!(
                             "Agent session complete for conversation {}, ending stream",
-                            conv_id.to_sql()
+                            conv_id_str
                         );
                         break;
                     }
@@ -551,7 +554,7 @@ impl Model {
                     tokio::time::sleep(poll_interval).await;
                 }
 
-                log::debug!("Stream monitor terminated for conversation: {}", conv_id.to_sql());
+                log::debug!("Stream monitor terminated for conversation: {}", conv_id_str);
             });
         }
 
@@ -736,8 +739,8 @@ fn convert_serialized_to_message(
     let content = extract_message_content(serialized)?;
 
     Some(Message {
-        id: MessageId(uuid::Uuid::new_v4().to_string()),
-        conversation_id: ConversationId(conversation_id.to_string()),
+        id: MessageId(surrealdb_types::RecordId::new("message", uuid::Uuid::new_v4().to_string())),
+        conversation_id: ConversationId::from(conversation_id),
         author,
         author_type,
         content,

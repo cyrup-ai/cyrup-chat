@@ -52,12 +52,12 @@ pub fn MentionInput(
                 if let Some(Ok(all_templates)) = templates.read().as_ref() {
                     let filtered: Vec<AgentTemplate> = all_templates
                         .iter()
-                        .filter(|t| room_agents.contains(&t.id.0))  // Only room participants
+                        .filter(|t| room_agents.contains(&t.id.0.to_sql()))  // Only room participants
                         .filter(|t| {
                             // Fuzzy match: name or ID contains filter
                             let filter_lower = filter.to_lowercase();
                             t.name.to_lowercase().contains(&filter_lower)
-                                || t.id.0.to_lowercase().contains(&filter_lower)
+                                || t.id.0.to_sql().to_lowercase().contains(&filter_lower)
                         })
                         .cloned()
                         .collect();

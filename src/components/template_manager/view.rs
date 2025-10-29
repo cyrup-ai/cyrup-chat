@@ -12,7 +12,7 @@
 //! - Q46: Templates have icon and color customization
 
 use crate::app::context::use_environment;
-use crate::view_model::agent::{AgentModel, AgentTemplate, AgentTemplateId};
+use crate::view_model::agent::{AgentModel, AgentTemplate};
 use chrono::Utc;
 use dioxus::prelude::*;
 use surrealdb_types::ToSql;
@@ -85,7 +85,7 @@ pub fn TemplateManagerComponent() -> Element {
 
         // Build template from form
         let template = AgentTemplate {
-            id: AgentTemplateId(current_editing_id.clone().unwrap_or_default()),
+            id: current_editing_id.clone().unwrap_or_default().into(),
             name: form_name.read().clone(),
             system_prompt: form_system_prompt.read().clone(),
             model: form_model.read().clone(),
@@ -218,7 +218,7 @@ pub fn TemplateManagerComponent() -> Element {
                         class: "template-list",
                         for template in templates.read().iter() {
                             TemplateCard {
-                                key: "{template.id.0}",
+                                key: "{template.id.0.to_sql()}",
                                 template: template.clone(),
                                 on_edit: handle_edit,
                                 on_delete: handle_delete,
@@ -242,7 +242,7 @@ fn TemplateCard(
 ) -> Element {
     // Clone template for use in both closures
     let template_for_edit = template.clone();
-    let template_id = template.id.0.clone();
+    let template_id = template.id.0.to_sql();
 
     rsx! {
         div {
