@@ -84,9 +84,9 @@ pub struct Message {
 /// Who authored this message
 ///
 /// Serializes to lowercase for database: "human", "agent", "system"
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, SurrealValue)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, SurrealValue, Default)]
 #[serde(rename_all = "lowercase")]
-#[derive(Default)]
+#[surreal(untagged, lowercase)]
 pub enum AuthorType {
     /// User sent this message
     #[default]
@@ -102,9 +102,9 @@ pub enum AuthorType {
 /// Message type classification
 ///
 /// Serializes to lowercase for database: "normal", "error", "system"
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, SurrealValue)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, SurrealValue, Default)]
 #[serde(rename_all = "lowercase")]
-#[derive(Default)]
+#[surreal(untagged, lowercase)]
 pub enum MessageType {
     /// Regular user or agent message
     #[default]
