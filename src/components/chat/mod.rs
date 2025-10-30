@@ -17,6 +17,7 @@ pub struct ChatMessage {
     pub pinned: bool,                       // Pin to top of conversation (max 5)
     pub reactions: Vec<ReactionSummary>,    // Aggregated reaction data for display
     pub unread: bool,                       // Unread status for notification tracking
+    pub is_error: bool,                     // Error message flag for distinct styling
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -41,7 +42,7 @@ impl ChatMessage {
     /// Uses database Message.id instead of generating random UUID.
     /// Converts Utc timestamp to Local for display.
     pub fn from_db_message(msg: crate::view_model::message::Message) -> Self {
-        use crate::view_model::message::AuthorType;
+        use crate::view_model::message::{AuthorType, MessageType};
         use chrono::TimeZone;
 
         let sender = match msg.author_type {
@@ -67,6 +68,7 @@ impl ChatMessage {
             pinned: msg.pinned,
             reactions: Vec::new(),  // Populated separately via LIVE QUERY
             unread: msg.unread,
+            is_error: msg.message_type == MessageType::Error,
         }
     }
 
@@ -82,6 +84,7 @@ impl ChatMessage {
             pinned: false,
             reactions: Vec::new(),
             unread: false,
+            is_error: false,
         }
     }
 
@@ -97,6 +100,7 @@ impl ChatMessage {
             pinned: false,
             reactions: Vec::new(),
             unread: false,
+            is_error: false,
         }
     }
 }

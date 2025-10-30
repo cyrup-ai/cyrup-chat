@@ -200,27 +200,7 @@ pub fn ChatComponent() -> Element {
                     log::error!("[Chat] Failed to mark messages as read: {}", e);
                 }
 
-                // STEP 1: Load existing messages FIRST
-                log::info!("[Chat] Loading existing messages for conversation: {}", current_id);
-                match database.get_all_messages(&current_id).await {
-                    Ok(db_messages) => {
-                        let chat_messages: Vec<ChatMessage> = db_messages
-                            .into_iter()
-                            .map(ChatMessage::from_db_message)
-                            .collect();
-
-                        // Display messages immediately without reactions
-                        // Reactions will be populated by LIVE QUERY subscription (line 321-410)
-                        let count = chat_messages.len();
-                        messages.set(chat_messages);
-                        log::info!("[Chat] Loaded {} existing messages", count);
-                    }
-                    Err(e) => {
-                        log::error!("[Chat] Failed to load existing messages: {}", e);
-                    }
-                }
-
-                // STEP 2: NOW start LIVE QUERY for future changes
+                // STEP 1: Start LIVE QUERY FIRST to prevent race condition
                 log::info!("[Chat] Starting LIVE QUERY subscription for: {}", current_id);
 
                 // Start LIVE QUERY
@@ -250,7 +230,27 @@ pub fn ChatComponent() -> Element {
 
                 log::info!("[Chat] LIVE QUERY subscription active");
 
-                // Consume notifications
+                // STEP 2: NOW load existing messages (after LIVE QUERY is active)
+                log::info!("[Chat] Loading existing messages for conversation: {}", current_id);
+                match database.get_all_messages(&current_id).await {
+                    Ok(db_messages) => {
+                        let chat_messages: Vec<ChatMessage> = db_messages
+                            .into_iter()
+                            .map(ChatMessage::from_db_message)
+                            .collect();
+
+                        // Display messages immediately without reactions
+                        // Reactions will be populated by LIVE QUERY subscription
+                        let count = chat_messages.len();
+                        messages.set(chat_messages);
+                        log::info!("[Chat] Loaded {} existing messages", count);
+                    }
+                    Err(e) => {
+                        log::error!("[Chat] Failed to load existing messages: {}", e);
+                    }
+                }
+
+                // STEP 3: Process stream notifications (new/updated/deleted messages)
                 while let Some(notification) = stream.next().await {
                     match notification {
                         Ok(notif) => {
@@ -258,10 +258,18 @@ pub fn ChatComponent() -> Element {
 
                             match notif.action {
                                 Action::Create => {
-                                    // New message - append to list
-                                    log::debug!("[Chat] LIVE QUERY: New message created");
+                                    // New message - check for duplicates before adding
                                     let chat_msg = ChatMessage::from_db_message(message_data);
-                                    messages.write().push(chat_msg);
+                                    
+                                    // Deduplication: prevent race condition where message appears in both initial load and LIVE stream
+                                    let mut msgs = messages.write();
+                                    if msgs.iter().any(|m| m.id == chat_msg.id) {
+                                        log::trace!("[Chat] Duplicate message ignored: {}", chat_msg.id);
+                                        return;
+                                    }
+                                    
+                                    msgs.push(chat_msg);
+                                    log::debug!("[Chat] LIVE QUERY: New message created");
                                 }
                                 Action::Update => {
                                     // Message updated (streaming!) - find by ID and replace
@@ -825,27 +833,36 @@ fn ChatMessageView(
     // State for emoji picker
     let mut show_emoji_picker = use_signal(|| false);
     
-    let (sender_classes, sender_name, sender_icon) = match message.sender {
-        MessageSender::User => (
-            "self-end bg-gradient-to-br from-[#0078ff]/20 to-[#00a8ff]/20 border border-[#00a8ff]/30 [box-shadow:inset_0_0_0_2000px_rgba(0,0,0,0.1)]",
-            "You",
-            "",
-        ),
-        MessageSender::Cyrup => (
-            "self-start bg-white/5 border border-white/10 [box-shadow:inset_0_0_0_2000px_rgba(0,0,0,0.1)]",
-            "CYRUP",
-            "",
-        ),
-        MessageSender::System => (
-            "self-center bg-yellow-500/10 border border-yellow-500/30 italic",
-            "System",
-            "ℹ️ ",
-        ),
-        MessageSender::Tool => (
-            "self-start bg-green-500/10 border border-green-500/30 font-mono text-sm",
-            "Tool",
-            "🔧 ",
-        ),
+    let (sender_classes, sender_name, sender_icon) = if message.is_error {
+        // Error messages get distinct red styling regardless of sender
+        (
+            "self-center bg-red-500/20 border-2 border-red-500/60 [box-shadow:0_0_15px_rgba(239,68,68,0.3)]",
+            "Error",
+            "⚠️ ",
+        )
+    } else {
+        match message.sender {
+            MessageSender::User => (
+                "self-end bg-gradient-to-br from-[#0078ff]/20 to-[#00a8ff]/20 border border-[#00a8ff]/30 [box-shadow:inset_0_0_0_2000px_rgba(0,0,0,0.1)]",
+                "You",
+                "",
+            ),
+            MessageSender::Cyrup => (
+                "self-start bg-white/5 border border-white/10 [box-shadow:inset_0_0_0_2000px_rgba(0,0,0,0.1)]",
+                "CYRUP",
+                "",
+            ),
+            MessageSender::System => (
+                "self-center bg-yellow-500/10 border border-yellow-500/30 italic",
+                "System",
+                "ℹ️ ",
+            ),
+            MessageSender::Tool => (
+                "self-start bg-green-500/10 border border-green-500/30 font-mono text-sm",
+                "Tool",
+                "🔧 ",
+            ),
+        }
     };
 
     let indent_class = if message.in_reply_to.is_some() {

@@ -61,12 +61,12 @@ pub async fn init_schema(db: &Surreal<Db>) -> Result<(), String> {
         DEFINE TABLE message SCHEMAFULL;
         DEFINE FIELD conversation_id ON message TYPE record<conversation> REFERENCE ON DELETE CASCADE;
         DEFINE FIELD author ON message TYPE string;
-        DEFINE FIELD author_type ON message TYPE string;
+        DEFINE FIELD author_type ON message TYPE string ASSERT $value IN ["human", "agent", "system", "tool"];
         DEFINE FIELD content ON message TYPE string ASSERT string::len($value) > 0;
         DEFINE FIELD timestamp ON message TYPE datetime DEFAULT time::now();
         DEFINE FIELD in_reply_to ON message TYPE option<record<message>>;
         DEFINE FIELD attachments ON message TYPE array DEFAULT [];
-        DEFINE FIELD message_type ON message TYPE string DEFAULT "normal";
+        DEFINE FIELD message_type ON message TYPE string DEFAULT "normal" ASSERT $value IN ["normal", "error", "system", "tool"];
         DEFINE FIELD unread ON message TYPE bool DEFAULT false;
         DEFINE FIELD deleted ON message TYPE bool DEFAULT false;
         DEFINE FIELD pinned ON message TYPE bool DEFAULT false;
