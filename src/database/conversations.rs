@@ -125,32 +125,30 @@ impl Database {
     /// doesn't support $parent variable. Iterates over conversations and computes
     /// related message data using LET statements with $conv.id reference.
     pub async fn list_conversations(&self) -> Result<Vec<ConversationSummary>, String> {
-        // Query using FOR loop pattern for correlated subqueries
+        // Query using SELECT with inline subqueries
         let query = r"
-            FOR $conv IN (SELECT id, title, participants, last_message_at 
-                          FROM conversation 
-                          ORDER BY last_message_at DESC) {
-                LET $last_msg_record = SELECT content, timestamp 
-                                        FROM message 
-                                        WHERE conversation_id = $conv.id 
-                                          AND deleted = false 
-                                        ORDER BY timestamp DESC 
-                                        LIMIT 1;
-                LET $unread = SELECT VALUE count() 
-                               FROM message 
-                               WHERE conversation_id = $conv.id 
-                                 AND unread = true 
-                                 AND deleted = false;
-                LET $preview = IF $last_msg_record[0] != NONE THEN $last_msg_record[0].content ELSE 'No messages yet' END;
-                RETURN {
-                    id: $conv.id,
-                    title: $conv.title,
-                    participants: $conv.participants,
-                    last_message_preview: $preview,
-                    last_message_timestamp: $conv.last_message_at,
-                    unread_count: $unread[0] ?? 0
-                };
-            }
+            SELECT 
+                id,
+                title,
+                participants,
+                (
+                    SELECT content, timestamp
+                    FROM message 
+                    WHERE conversation_id = $parent.id 
+                      AND deleted = false 
+                    ORDER BY timestamp DESC 
+                    LIMIT 1
+                )[0].content OR 'No messages yet' AS last_message_preview,
+                last_message_at AS last_message_timestamp,
+                (
+                    SELECT VALUE count() 
+                    FROM message 
+                    WHERE conversation_id = $parent.id 
+                      AND unread = true 
+                      AND deleted = false
+                )[0] OR 0 AS unread_count
+            FROM conversation
+            ORDER BY last_message_at DESC
         ";
 
         // Execute query and extract result set

@@ -263,13 +263,13 @@ pub fn ChatComponent() -> Element {
                                     
                                     // Deduplication: prevent race condition where message appears in both initial load and LIVE stream
                                     let mut msgs = messages.write();
-                                    if msgs.iter().any(|m| m.id == chat_msg.id) {
+                                    if !msgs.iter().any(|m| m.id == chat_msg.id) {
+                                        // Only push if NOT a duplicate
+                                        msgs.push(chat_msg);
+                                        log::debug!("[Chat] LIVE QUERY: New message created");
+                                    } else {
                                         log::trace!("[Chat] Duplicate message ignored: {}", chat_msg.id);
-                                        return;
                                     }
-                                    
-                                    msgs.push(chat_msg);
-                                    log::debug!("[Chat] LIVE QUERY: New message created");
                                 }
                                 Action::Update => {
                                     // Message updated (streaming!) - find by ID and replace
