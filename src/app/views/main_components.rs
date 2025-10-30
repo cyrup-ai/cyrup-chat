@@ -6,7 +6,7 @@ use crate::components::chat::ChatComponent;
 use crate::environment::Environment;
 use chrono::{DateTime, Local, Utc};
 use dioxus::prelude::*;
-use surrealdb_types::ToSql;
+use surrealdb_types::{RecordId, ToSql};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum ViewMode {
@@ -130,11 +130,11 @@ pub fn ChatHistorySidebar(auth_state: AuthState) -> Element {
     let environment = use_context::<Environment>();
     
     // Get or create selected conversation ID context
-    let mut selected_conversation_id = match try_use_context::<Signal<String>>() {
+    let mut selected_conversation_id = match try_use_context::<Signal<RecordId>>() {
         Some(id) => id,
         None => {
             // Context not provided, create default
-            let id = use_signal(|| "conversation:default_chat".to_string());
+            let id = use_signal(|| RecordId::new("conversation", "default_chat"));
             use_context_provider(|| id);
             id
         }
@@ -143,10 +143,11 @@ pub fn ChatHistorySidebar(auth_state: AuthState) -> Element {
     // Clone environment for use in different closures
     let environment_for_button = environment.clone();
 
-    // Load conversations from database
+    // Load recent conversations from database (limit=10 for sidebar)
+    // Full conversation list available in Timeline view
     let conversations = use_resource(move || {
         let database = environment.database.clone();
-        async move { database.list_conversations().await }
+        async move { database.list_recent_conversations(10).await }
     });
 
     // Calculate total unread count across all conversations
@@ -246,10 +247,10 @@ pub fn ChatHistorySidebar(auth_state: AuthState) -> Element {
                             }
                         } else {
                             {convos.iter().map(|convo| {
-                                let convo_id = convo.id.0.to_sql();
-                                let is_selected = selected_conversation_id.read().as_str() == convo_id.as_str();
+                                let convo_id = convo.id.clone();
+                                let is_selected = *selected_conversation_id.read() == convo_id;
                                 let convo_id_for_click = convo_id.clone();
-                                let convo_key = convo_id.clone();
+                                let convo_key = convo_id.to_sql();
                                 let timestamp_str = format_timestamp(&convo.last_message_timestamp);
                                 let title_str = convo.title.clone();
                                 let unread = convo.unread_count;
@@ -324,10 +325,9 @@ fn format_timestamp(timestamp: &DateTime<Utc>) -> String {
 /// Create a new conversation and select it
 async fn create_new_conversation(
     environment: Environment,
-    mut selected_conversation_id: Signal<String>,
+    mut selected_conversation_id: Signal<RecordId>,
 ) -> Result<(), String> {
-    use crate::view_model::agent::AgentTemplateId;
-    use crate::view_model::conversation::{Conversation, ConversationId};
+    use crate::view_model::conversation::Conversation;
     
     let db = environment.database;
 
@@ -337,19 +337,19 @@ async fn create_new_conversation(
     // For MVP: Use first template or default ID
     let template_id = templates
         .first()
-        .map(|t| t.id.0.clone())
-        .unwrap_or_else(|| surrealdb_types::RecordId::new("agent_template", "default"));
+        .map(|t| t.id.clone())
+        .unwrap_or_else(|| RecordId::new("agent_template", "default"));
 
     // Generate new conversation ID
     let new_id_key = uuid::Uuid::new_v4().to_string();
-    let new_id = surrealdb_types::RecordId::new("conversation", new_id_key.as_str());
+    let new_id = RecordId::new("conversation", new_id_key.as_str());
 
     // Create conversation
     let now = chrono::Utc::now();
     let conversation = Conversation {
-        id: ConversationId(new_id.clone()),
+        id: new_id.clone(),
         title: "New Conversation".to_string(),
-        participants: vec![AgentTemplateId(template_id)],
+        participants: vec![template_id],
         summary: String::new(),
         agent_sessions: std::collections::HashMap::new(),
         last_summarized_message_id: None,
@@ -357,11 +357,11 @@ async fn create_new_conversation(
         created_at: now.into(),
     };
 
-    db.create_conversation(&conversation).await?;
-    log::info!("[ChatHistory] Created new conversation: {}", new_id.to_sql());
+    let created_id = db.create_conversation(&conversation).await?;
+    log::info!("[ChatHistory] Created new conversation: {}", created_id.to_sql());
 
     // Auto-select newly created conversation
-    selected_conversation_id.set(new_id.to_sql());
+    selected_conversation_id.set(created_id);
 
     Ok(())
 }

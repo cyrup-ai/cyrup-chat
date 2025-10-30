@@ -6,40 +6,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use surrealdb_types::{RecordId, SurrealValue, ToSql};
 
-/// Agent template ID newtype wrapper following pattern from src/view_model/types.rs
-#[derive(Debug, Eq, PartialEq, Hash, Clone, Serialize, Deserialize, SurrealValue)]
-pub struct AgentTemplateId(pub RecordId);
-
-impl Default for AgentTemplateId {
-    fn default() -> Self {
-        AgentTemplateId(RecordId::new("agent_template", "default"))
-    }
-}
-
-impl std::fmt::Display for AgentTemplateId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0.to_sql())
-    }
-}
-
-impl From<RecordId> for AgentTemplateId {
-    fn from(r: RecordId) -> Self {
-        AgentTemplateId(r)
-    }
-}
-
-impl From<String> for AgentTemplateId {
-    fn from(s: String) -> Self {
-        AgentTemplateId(RecordId::parse_simple(&s).unwrap_or_else(|_| RecordId::new("agent_template", s)))
-    }
-}
-
-impl From<&str> for AgentTemplateId {
-    fn from(s: &str) -> Self {
-        AgentTemplateId(RecordId::parse_simple(s).unwrap_or_else(|_| RecordId::new("agent_template", s)))
-    }
-}
-
 /// Agent template configuration
 ///
 /// Database mapping (src/database/schema.rs:24-36):
@@ -52,7 +18,7 @@ impl From<&str> for AgentTemplateId {
 /// - created_at → created_at (datetime)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, SurrealValue)]
 pub struct AgentTemplate {
-    pub id: AgentTemplateId,
+    pub id: RecordId,
     pub name: String,
     pub system_prompt: String,
     pub model: AgentModel,
@@ -91,7 +57,7 @@ impl std::fmt::Display for AgentModel {
 impl Default for AgentTemplate {
     fn default() -> Self {
         Self {
-            id: AgentTemplateId::default(),
+            id: RecordId::new("agent_template", "default"),
             name: "Default Agent".to_string(),
             system_prompt: "You are a helpful AI assistant.".to_string(),
             model: AgentModel::default(),

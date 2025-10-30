@@ -20,6 +20,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     
     log::info!("CYRUP Chat starting...");
     
+    // Initialize i18n system
+    crate::i18n::init_i18n();
+    
     // Initialize vault first
     tokio::runtime::Runtime::new()?.block_on(async { crate::auth::initialize_vault().await })?;
 

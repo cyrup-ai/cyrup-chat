@@ -2,44 +2,9 @@
 //!
 //! Aligns with src/database/schema.rs message table (lines 57-74)
 
-use super::conversation::ConversationId;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use surrealdb_types::{Datetime, RecordId, SurrealValue, ToSql};
-
-/// Message ID newtype wrapper
-#[derive(Debug, Eq, PartialEq, Hash, Clone, Serialize, Deserialize, SurrealValue)]
-pub struct MessageId(pub RecordId);
-
-impl Default for MessageId {
-    fn default() -> Self {
-        MessageId(RecordId::new("message", "default"))
-    }
-}
-
-impl std::fmt::Display for MessageId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0.to_sql())
-    }
-}
-
-impl From<RecordId> for MessageId {
-    fn from(r: RecordId) -> Self {
-        MessageId(r)
-    }
-}
-
-impl From<String> for MessageId {
-    fn from(s: String) -> Self {
-        MessageId(RecordId::parse_simple(&s).unwrap_or_else(|_| RecordId::new("message", s)))
-    }
-}
-
-impl From<&str> for MessageId {
-    fn from(s: &str) -> Self {
-        MessageId(RecordId::parse_simple(s).unwrap_or_else(|_| RecordId::new("message", s)))
-    }
-}
 
 /// Message in an agent conversation
 ///
@@ -63,13 +28,13 @@ impl From<&str> for MessageId {
 /// - Q3: attachments stores file paths as Vec<String>
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, SurrealValue)]
 pub struct Message {
-    pub id: MessageId,
-    pub conversation_id: ConversationId,
+    pub id: RecordId,
+    pub conversation_id: RecordId,
     pub author: String,
     pub author_type: AuthorType,
     pub content: String,
     pub timestamp: Datetime,
-    pub in_reply_to: Option<MessageId>,
+    pub in_reply_to: Option<RecordId>,
     pub message_type: MessageType,
     /// File paths to attachments (Q3 from MASTODON_ROSETTA_STONE.md)
     pub attachments: Vec<String>,
@@ -120,8 +85,8 @@ pub enum MessageType {
 impl Default for Message {
     fn default() -> Self {
         Self {
-            id: MessageId::default(),
-            conversation_id: ConversationId::default(),
+            id: RecordId::new("message", "default"),
+            conversation_id: RecordId::new("conversation", "default"),
             author: String::new(),
             author_type: AuthorType::Human,
             content: String::new(),

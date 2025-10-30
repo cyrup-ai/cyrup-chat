@@ -7,9 +7,9 @@
 //! - LIVE QUERY subscribers receive Action::Update automatically
 
 use crate::database::Database;
-use crate::view_model::message::{AuthorType, Message, MessageId, MessageType};
+use crate::view_model::message::{AuthorType, Message, MessageType};
 use flume::{Receiver, Sender, unbounded};
-use surrealdb_types::ToSql;
+use surrealdb_types::{RecordId, ToSql};
 use futures_util::stream::{FuturesUnordered, StreamExt};  // For concurrent agent execution
 use kodegen_tools_claude_agent::{
     ClaudeAgentOptions, ClaudeSDKClient, ContentBlock, Message as AgentMessage, SystemPrompt,
@@ -60,20 +60,20 @@ pub fn get_tool_event_channel() -> &'static (Sender<String>, Receiver<String>) {
 /// 5. All responses appear in unified timeline via LIVE QUERY
 pub async fn send_message(
     database: Arc<Database>,
-    conversation_id: String,
+    conversation_id: RecordId,
     user_message: String,
-    mentioned_agents: Option<Vec<String>>,
-    parent_message_id: Option<String>,
+    mentioned_agents: Option<Vec<RecordId>>,
+    parent_message_id: Option<RecordId>,
 ) -> Result<(), String> {
     // 1. Save user message to database
     let user_msg = Message {
-        id: MessageId::default(), // DB generates actual ID
-        conversation_id: conversation_id.clone().into(),
+        id: RecordId::new("message", "default"), // DB generates actual ID
+        conversation_id: conversation_id.clone(),
         author: "User".to_string(),
         author_type: AuthorType::Human,
         content: user_message.clone(),
         timestamp: chrono::Utc::now().into(),
-        in_reply_to: parent_message_id.map(MessageId::from),
+        in_reply_to: parent_message_id,
         message_type: MessageType::Normal,
         attachments: Vec::new(),
         unread: false, // User's own messages start as read
@@ -87,15 +87,15 @@ pub async fn send_message(
     let conversation = database.get_conversation(&conversation_id).await?;
 
     // 3. Determine which agents to message
-    let target_agents: Vec<String> = if let Some(agents) = mentioned_agents {
+    let target_agents: Vec<RecordId> = if let Some(agents) = mentioned_agents {
         // Multi-agent: Use @mentioned agents
         agents
     } else if conversation.participants.len() == 1 {
         // Single-agent: Use the one participant
-        vec![conversation.participants[0].0.to_sql()]
+        vec![conversation.participants[0].clone()]
     } else {
         // Multi-agent without mentions: Message all participants
-        conversation.participants.iter().map(|p| p.0.to_sql()).collect()
+        conversation.participants.clone()
     };
 
     // Validate target_agents not empty (follows pattern from notifications/content.rs:28)
@@ -105,7 +105,7 @@ pub async fn send_message(
 
     log::info!(
         "[Chat] Sending message to conversation {} with {} target agent(s)",
-        conversation_id,
+        conversation_id.to_sql(),
         target_agents.len()
     );
 
@@ -139,13 +139,13 @@ pub async fn send_message(
 /// Single agent message handler with session persistence
 async fn send_to_single_agent(
     database: Arc<Database>,
-    conversation_id: String,
+    conversation_id: RecordId,
     user_message: String,
-    user_msg_id: String,
-    agent_id: &str,
+    user_msg_id: RecordId,
+    agent_id: &RecordId,
     existing_session_id: Option<String>,
 ) -> Result<(), String> {
-    log::debug!("[Chat] Single agent mode: {}", agent_id);
+    log::debug!("[Chat] Single agent mode: {}", agent_id.to_sql());
 
     // Get agent template
     let template = database.get_template(agent_id).await?;
@@ -190,7 +190,7 @@ async fn send_to_single_agent(
         database,
         conversation_id,
         user_msg_id,
-        agent_id.to_string(),
+        agent_id.clone(),
     )
     .await
 }
@@ -198,11 +198,11 @@ async fn send_to_single_agent(
 /// Multi-agent message handler with concurrent execution
 async fn send_to_multiple_agents(
     database: Arc<Database>,
-    conversation_id: String,
+    conversation_id: RecordId,
     user_message: String,
-    user_msg_id: String,
-    target_agents: Vec<String>,
-    agent_sessions: std::collections::HashMap<String, String>,
+    user_msg_id: RecordId,
+    target_agents: Vec<RecordId>,
+    agent_sessions: std::collections::HashMap<RecordId, String>,
 ) -> Result<(), String> {
     log::info!(
         "[Chat] Multi-agent mode: {} agents",
@@ -220,7 +220,7 @@ async fn send_to_multiple_agents(
         let existing_session_id = agent_sessions.get(&agent_id).cloned();
 
         agent_tasks.push(async move {
-            log::info!("[Chat] Spawning agent: {}", agent_id);
+            log::info!("[Chat] Spawning agent: {}", agent_id.to_sql());
 
             // Get agent template
             let template = database.get_template(&agent_id).await?;
@@ -250,15 +250,15 @@ async fn send_to_multiple_agents(
 
             let mut client = ClaudeSDKClient::new(options, None)
                 .await
-                .map_err(|e| format!("Failed to create Claude client for {}: {}", agent_id, e))?;
+                .map_err(|e| format!("Failed to create Claude client for {}: {}", agent_id.to_sql(), e))?;
 
-            log::debug!("[Chat] Sending message to agent {}", agent_id);
+            log::debug!("[Chat] Sending message to agent {}", agent_id.to_sql());
 
             // Send message
             client
                 .send_message(&user_message)
                 .await
-                .map_err(|e| format!("Failed to send to agent {}: {}", agent_id, e))?;
+                .map_err(|e| format!("Failed to send to agent {}: {}", agent_id.to_sql(), e))?;
 
             // Stream responses
             stream_agent_responses(
@@ -321,12 +321,12 @@ async fn send_to_multiple_agents(
 async fn stream_agent_responses(
     mut client: ClaudeSDKClient,
     database: Arc<Database>,
-    conversation_id: String,
-    user_msg_id: String,
-    agent_id: String,
+    conversation_id: RecordId,
+    user_msg_id: RecordId,
+    agent_id: RecordId,
 ) -> Result<(), String> {
     let mut accumulated_text = String::new();
-    let mut message_id: Option<String> = None;
+    let mut message_id: Option<RecordId> = None;
     let mut session_id: Option<String> = None;
 
     // Debouncing state
@@ -366,13 +366,13 @@ async fn stream_agent_responses(
                                 // First chunk: INSERT message
                                 if message_id.is_none() {
                                     let msg = Message {
-                                        id: MessageId::default(),
-                                        conversation_id: conversation_id.clone().into(),
+                                        id: RecordId::default(),
+                                        conversation_id: conversation_id.clone(),
                                         author: "Assistant".to_string(),
                                         author_type: AuthorType::Agent,
                                         content: accumulated_text.clone(),
                                         timestamp: chrono::Utc::now().into(),
-                                        in_reply_to: Some(user_msg_id.clone().into()),
+                                        in_reply_to: Some(user_msg_id.clone()),
                                         message_type: MessageType::Normal,
                                         attachments: Vec::new(),
                                         unread: true,
@@ -486,8 +486,8 @@ async fn stream_agent_responses(
 
                     // Save error message
                     let error_msg = Message {
-                        id: MessageId::default(),
-                        conversation_id: conversation_id.clone().into(),
+                        id: RecordId::default(),
+                        conversation_id: conversation_id.clone(),
                         author: "system".to_string(),
                         author_type: AuthorType::System,
                         content: format!("⚠️ Agent Error: {}", error_text),
@@ -516,8 +516,8 @@ async fn stream_agent_responses(
                 log::error!("[AgentChat] Stream error: {}", e);
 
                 let error_msg = Message {
-                    id: MessageId::default(),
-                    conversation_id: conversation_id.clone().into(),
+                    id: RecordId::default(),
+                    conversation_id: conversation_id.clone(),
                     author: "system".to_string(),
                     author_type: AuthorType::System,
                     content: format!("⚠️ Stream error: {}", e),
@@ -542,7 +542,7 @@ async fn stream_agent_responses(
 
     // Store session_id for next turn (lazy spawn pattern)
     if let Some(sid) = session_id {
-        log::info!("[Chat] Storing session_id for agent {} in conversation {}", agent_id, conversation_id);
+        log::info!("[Chat] Storing session_id for agent {} in conversation {}", agent_id.to_sql(), conversation_id.to_sql());
         database
             .update_agent_session(&conversation_id, &agent_id, &sid)
             .await?;

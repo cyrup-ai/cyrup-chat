@@ -19,7 +19,7 @@ impl Database {
     /// * `message` - Message to insert (id field ignored, DB generates ID)
     ///
     /// # Returns
-    /// * `Ok(String)` - Database-generated message ID
+    /// * `Ok(RecordId)` - Database-generated message ID
     /// * `Err(String)` - Error message if insertion fails
     ///
     /// # Database Operations
@@ -28,7 +28,7 @@ impl Database {
     ///
     /// # Design Note
     /// Both operations must succeed together for conversation sorting accuracy.
-    pub async fn insert_message(&self, message: &Message) -> Result<String, String> {
+    pub async fn insert_message(&self, message: &Message) -> Result<RecordId, String> {
         // Serialize message fields for database insertion
         #[derive(Serialize, SurrealValue)]
         struct MessageInsert {
@@ -46,12 +46,12 @@ impl Database {
         }
 
         let insert_data = MessageInsert {
-            conversation_id: message.conversation_id.0.clone(),
+            conversation_id: message.conversation_id.clone(),
             author: message.author.clone(),
             author_type: message.author_type,
             content: message.content.clone(),
             timestamp: *message.timestamp,
-            in_reply_to: message.in_reply_to.as_ref().map(|id| id.0.clone()),
+            in_reply_to: message.in_reply_to.clone(),
             message_type: message.message_type,
             attachments: message.attachments.clone(),
             unread: message.unread,
@@ -69,25 +69,24 @@ impl Database {
 
         let message_id = result
             .as_ref()
-            .map(|m| m.id.0.clone())
+            .map(|m| m.id.clone())
             .ok_or_else(|| "Insert returned empty result".to_string())?;
 
         // Update conversation last_message_at timestamp
-        // Convert &str to String to satisfy 'static lifetime for async
         let update_query = r"
             UPDATE conversation 
             SET last_message_at = $timestamp 
-            WHERE id = type::record('conversation', $conversation_id)
+            WHERE id = $conversation_id
         ";
 
         self.client()
             .query(update_query)
-            .bind(("conversation_id", message.conversation_id.0.to_sql()))
+            .bind(("conversation_id", message.conversation_id.clone()))
             .bind(("timestamp", message.timestamp))
             .await
             .map_err(|e| format!("Failed to update conversation timestamp: {}", e))?;
 
-        Ok(message_id.to_sql())
+        Ok(message_id)
     }
 
     /// Get recent messages for agent context window
@@ -103,7 +102,7 @@ impl Database {
     /// Returns oldest-first ordering for agent context window.
     /// Filters out soft-deleted messages (deleted=false).
     /// Uses token-aware dynamic limit based on configured token budget.
-    pub async fn get_recent_messages(&self, conversation_id: &str) -> Result<Vec<Message>, String> {
+    pub async fn get_recent_messages(&self, conversation_id: &RecordId) -> Result<Vec<Message>, String> {
         // Calculate dynamic limit based on token budget
         let message_limit = self.token_budget_config.calculate_message_limit();
 
@@ -112,7 +111,7 @@ impl Database {
             r#"
             SELECT *
             FROM message
-            WHERE conversation_id = type::record('conversation', $conversation_id)
+            WHERE conversation_id = $conversation_id
               AND deleted = false
             ORDER BY timestamp ASC
             LIMIT {}
@@ -123,7 +122,7 @@ impl Database {
         let mut response = self
             .client()
             .query(&query)
-            .bind(("conversation_id", conversation_id.to_string()))
+            .bind(("conversation_id", conversation_id.clone()))
             .await
             .map_err(|e| format!("Failed to get recent messages: {}", e))?;
 
@@ -146,12 +145,11 @@ impl Database {
     /// # Design Note
     /// Returns oldest-first ordering for chat display.
     /// Filters out soft-deleted messages (deleted=false).
-    pub async fn get_all_messages(&self, conversation_id: &str) -> Result<Vec<Message>, String> {
-        // Convert &str to String to satisfy 'static lifetime for async
+    pub async fn get_all_messages(&self, conversation_id: &RecordId) -> Result<Vec<Message>, String> {
         let query = r"
             SELECT *
             FROM message
-            WHERE conversation_id = type::record('conversation', $conversation_id)
+            WHERE conversation_id = $conversation_id
               AND deleted = false
             ORDER BY timestamp ASC
         ";
@@ -159,7 +157,7 @@ impl Database {
         let mut response = self
             .client()
             .query(query)
-            .bind(("conversation_id", conversation_id.to_string()))
+            .bind(("conversation_id", conversation_id.clone()))
             .await
             .map_err(|e| format!("Failed to get all messages: {}", e))?;
 
@@ -185,14 +183,13 @@ impl Database {
     /// Filters out soft-deleted messages (deleted=false).
     pub async fn search_messages(
         &self,
-        conversation_id: &str,
+        conversation_id: &RecordId,
         search_term: &str,
     ) -> Result<Vec<Message>, String> {
-        // Convert &str to String to satisfy 'static lifetime for async
         let query = r"
             SELECT *
             FROM message
-            WHERE conversation_id = type::record('conversation', $conversation_id)
+            WHERE conversation_id = $conversation_id
               AND content CONTAINS $search_term
               AND deleted = false
             ORDER BY timestamp ASC
@@ -201,7 +198,7 @@ impl Database {
         let mut response = self
             .client()
             .query(query)
-            .bind(("conversation_id", conversation_id.to_string()))
+            .bind(("conversation_id", conversation_id.clone()))
             .bind(("search_term", search_term.to_string()))
             .await
             .map_err(|e| format!("Failed to search messages: {}", e))?;
@@ -225,17 +222,16 @@ impl Database {
     /// # Design Note (Q30)
     /// Called when user opens conversation. Sets unread=false for all messages.
     /// Used for notification badge clearing.
-    pub async fn mark_messages_read(&self, conversation_id: &str) -> Result<(), String> {
-        // Convert &str to String to satisfy 'static lifetime for async
+    pub async fn mark_messages_read(&self, conversation_id: &RecordId) -> Result<(), String> {
         let query = r"
             UPDATE message
             SET unread = false
-            WHERE conversation_id = type::record('conversation', $conversation_id)
+            WHERE conversation_id = $conversation_id
         ";
 
         self.client()
             .query(query)
-            .bind(("conversation_id", conversation_id.to_string()))
+            .bind(("conversation_id", conversation_id.clone()))
             .await
             .map_err(|e| format!("Failed to mark messages read: {}", e))?;
 
@@ -253,12 +249,11 @@ impl Database {
     ///
     /// # Design Note (Q30)
     /// Used for notification badge counts. Excludes soft-deleted messages.
-    pub async fn get_unread_count(&self, conversation_id: &str) -> Result<u32, String> {
-        // Convert &str to String to satisfy 'static lifetime for async
+    pub async fn get_unread_count(&self, conversation_id: &RecordId) -> Result<u32, String> {
         let query = r"
             SELECT count() AS count
             FROM message
-            WHERE conversation_id = type::record('conversation', $conversation_id)
+            WHERE conversation_id = $conversation_id
               AND unread = true
               AND deleted = false
         ";
@@ -266,7 +261,7 @@ impl Database {
         let mut response = self
             .client()
             .query(query)
-            .bind(("conversation_id", conversation_id.to_string()))
+            .bind(("conversation_id", conversation_id.clone()))
             .await
             .map_err(|e| format!("Failed to get unread count: {}", e))?;
 
@@ -294,17 +289,16 @@ impl Database {
     /// # Design Note (Q35)
     /// Sets deleted=true, does NOT remove from database.
     /// Preserves message for agent context but hides from UI.
-    pub async fn delete_message(&self, message_id: &str) -> Result<(), String> {
-        // Convert &str to String to satisfy 'static lifetime for async
+    pub async fn delete_message(&self, message_id: &RecordId) -> Result<(), String> {
         let query = r"
             UPDATE message
             SET deleted = true
-            WHERE id = type::record('message', $message_id)
+            WHERE id = $message_id
         ";
 
         self.client()
             .query(query)
-            .bind(("message_id", message_id.to_string()))
+            .bind(("message_id", message_id.clone()))
             .await
             .map_err(|e| format!("Failed to delete message: {}", e))?;
 
@@ -326,21 +320,20 @@ impl Database {
     /// Checks current pin count before allowing new pin.
     pub async fn toggle_pin_message(
         &self,
-        message_id: &str,
-        conversation_id: &str,
+        message_id: &RecordId,
+        conversation_id: &RecordId,
     ) -> Result<bool, String> {
         // Get current message state
-        // Convert &str to String to satisfy 'static lifetime for async
         let current_query = r"
             SELECT pinned
             FROM message
-            WHERE id = type::record('message', $message_id)
+            WHERE id = $message_id
         ";
 
         let mut current_response = self
             .client()
             .query(current_query)
-            .bind(("message_id", message_id.to_string()))
+            .bind(("message_id", message_id.clone()))
             .await
             .map_err(|e| format!("Failed to get message state: {}", e))?;
 
@@ -363,14 +356,14 @@ impl Database {
             let count_query = r"
                 SELECT count() AS count
                 FROM message
-                WHERE conversation_id = type::record('conversation', $conversation_id)
+                WHERE conversation_id = $conversation_id
                   AND pinned = true
             ";
 
             let mut count_response = self
                 .client()
                 .query(count_query)
-                .bind(("conversation_id", conversation_id.to_string()))
+                .bind(("conversation_id", conversation_id.clone()))
                 .await
                 .map_err(|e| format!("Failed to check pin count: {}", e))?;
 
@@ -395,12 +388,12 @@ impl Database {
         let update_query = r"
             UPDATE message
             SET pinned = $pinned
-            WHERE id = type::record('message', $message_id)
+            WHERE id = $message_id
         ";
 
         self.client()
             .query(update_query)
-            .bind(("message_id", message_id.to_string()))
+            .bind(("message_id", message_id))
             .bind(("pinned", new_state))
             .await
             .map_err(|e| format!("Failed to toggle pin: {}", e))?;
@@ -420,12 +413,11 @@ impl Database {
     /// # Design Note
     /// Used for displaying pinned messages in conversation header.
     /// Maximum 5 pinned messages per conversation (enforced by toggle_pin_message).
-    pub async fn get_pinned_messages(&self, conversation_id: &str) -> Result<Vec<Message>, String> {
-        // Convert &str to String to satisfy 'static lifetime for async
+    pub async fn get_pinned_messages(&self, conversation_id: &RecordId) -> Result<Vec<Message>, String> {
         let query = r"
             SELECT *
             FROM message
-            WHERE conversation_id = type::record('conversation', $conversation_id)
+            WHERE conversation_id = $conversation_id
               AND pinned = true
               AND deleted = false
             ORDER BY timestamp ASC
@@ -434,7 +426,7 @@ impl Database {
         let mut response = self
             .client()
             .query(query)
-            .bind(("conversation_id", conversation_id.to_string()))
+            .bind(("conversation_id", conversation_id))
             .await
             .map_err(|e| format!("Failed to get pinned messages: {}", e))?;
 
@@ -461,7 +453,7 @@ impl Database {
     /// Pattern: INSERT first chunk, UPDATE subsequent chunks.
     pub async fn update_message_content(
         &self,
-        message_id: &str,
+        message_id: &RecordId,
         new_content: String,
     ) -> Result<(), String> {
         let query = r"
@@ -472,7 +464,7 @@ impl Database {
 
         self.client()
             .query(query)
-            .bind(("message_id", message_id.to_string()))
+            .bind(("message_id", message_id))
             .bind(("content", new_content))
             .await
             .map_err(|e| format!("Failed to update message content: {}", e))?;
@@ -488,19 +480,18 @@ impl Database {
     /// # Returns
     /// * `Ok(Message)` - Message details
     /// * `Err(String)` - Not found or query failed
-    pub async fn get_message(&self, message_id: &str) -> Result<Message, String> {
-        // Convert &str to String to satisfy 'static lifetime for async
+    pub async fn get_message(&self, message_id: &RecordId) -> Result<Message, String> {
         let query = r"
             SELECT *
             FROM message
-            WHERE id = type::record('message', $message_id)
+            WHERE id = $message_id
             LIMIT 1
         ";
 
         let mut response = self
             .client()
             .query(query)
-            .bind(("message_id", message_id.to_string()))
+            .bind(("message_id", message_id))
             .await
             .map_err(|e| format!("Failed to get message: {}", e))?;
 
@@ -521,14 +512,13 @@ impl Database {
     /// # Returns
     /// * `Ok(())` - Message pinned successfully
     /// * `Err(String)` - Pin limit exceeded or update failed
-    pub async fn pin_message(&self, message_id: &str) -> Result<(), String> {
+    pub async fn pin_message(&self, message_id: &RecordId) -> Result<(), String> {
         // Get message to find conversation_id
         let message = self.get_message(message_id).await?;
 
         // Use toggle if not already pinned
         if !message.pinned {
-            let conv_id = message.conversation_id.0.to_sql();
-            self.toggle_pin_message(message_id, &conv_id)
+            self.toggle_pin_message(message_id, &message.conversation_id)
                 .await?;
         }
 
@@ -543,17 +533,16 @@ impl Database {
     /// # Returns
     /// * `Ok(())` - Message unpinned successfully
     /// * `Err(String)` - Update failed
-    pub async fn unpin_message(&self, message_id: &str) -> Result<(), String> {
-        // Convert &str to String to satisfy 'static lifetime for async
+    pub async fn unpin_message(&self, message_id: &RecordId) -> Result<(), String> {
         let query = r"
             UPDATE message
             SET pinned = false
-            WHERE id = type::record('message', $message_id)
+            WHERE id = $message_id
         ";
 
         self.client()
             .query(query)
-            .bind(("message_id", message_id.to_string()))
+            .bind(("message_id", message_id))
             .await
             .map_err(|e| format!("Failed to unpin message: {}", e))?;
 
@@ -608,18 +597,18 @@ impl Database {
     /// # Database Operation
     /// Updates all messages where conversation_id matches and unread=true,
     /// setting unread=false. This clears unread count for the conversation.
-    pub async fn mark_messages_as_read(&self, conversation_id: String) -> Result<(), String> {
-        let query = "UPDATE message SET unread = false WHERE conversation_id = type::record('conversation', $id) AND unread = true";
+    pub async fn mark_messages_as_read(&self, conversation_id: &RecordId) -> Result<(), String> {
+        let query = "UPDATE message SET unread = false WHERE conversation_id = $conversation_id AND unread = true";
 
         self.client()
             .query(query)
-            .bind(("id", conversation_id.clone()))
+            .bind(("conversation_id", conversation_id))
             .await
             .map_err(|e| format!("Failed to mark messages as read: {}", e))?;
 
         log::debug!(
             "[Database] Marked messages as read for conversation: {}",
-            conversation_id
+            conversation_id.to_sql()
         );
 
         Ok(())

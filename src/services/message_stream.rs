@@ -5,11 +5,11 @@
 
 use futures_util::StreamExt;
 use std::sync::Arc;
+use surrealdb_types::RecordId;
 
 use crate::database::Database;
 use crate::services::agent_chat::get_tool_event_channel;
-use crate::view_model::conversation::ConversationId;
-use crate::view_model::message::{AuthorType, Message, MessageId, MessageType};
+use crate::view_model::message::{AuthorType, Message, MessageType};
 use kodegen_tools_claude_agent::{
     ClaudeAgentOptions, ContentBlock, Message as AgentMessage, query,
 };
@@ -32,7 +32,7 @@ use kodegen_tools_claude_agent::{
 /// # Pattern
 /// Follows SummarizerService pattern from [src/services/summarizer.rs:190-212](../src/services/summarizer.rs)
 pub async fn stream_agent_responses(
-    conversation_id: String,
+    conversation_id: RecordId,
     prompt: String,
     options: ClaudeAgentOptions,
     db: Arc<Database>,
@@ -157,10 +157,10 @@ pub async fn stream_agent_responses(
 }
 
 /// Create agent message for database insertion
-fn create_agent_message(conversation_id: &str, content: &str) -> Message {
+fn create_agent_message(conversation_id: &RecordId, content: &str) -> Message {
     Message {
-        id: MessageId::default(), // DB generates actual ID
-        conversation_id: ConversationId::from(conversation_id),
+        id: RecordId::default(), // DB generates actual ID
+        conversation_id: conversation_id.clone(),
         author: "Assistant".to_string(),
         author_type: AuthorType::Agent,
         content: content.to_string(),
@@ -175,10 +175,10 @@ fn create_agent_message(conversation_id: &str, content: &str) -> Message {
 }
 
 /// Create error message for database insertion
-fn create_error_message(conversation_id: &str, error: &str) -> Message {
+fn create_error_message(conversation_id: &RecordId, error: &str) -> Message {
     Message {
-        id: MessageId::default(),
-        conversation_id: ConversationId::from(conversation_id),
+        id: RecordId::default(),
+        conversation_id: conversation_id.clone(),
         author: "system".to_string(),
         author_type: AuthorType::System,
         content: format!("⚠️ Agent Error: {}", error),

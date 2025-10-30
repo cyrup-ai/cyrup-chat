@@ -4,7 +4,7 @@
 
 use super::Database;
 use crate::view_model::agent::AgentTemplate;
-use surrealdb_types::ToSql;
+use surrealdb_types::{RecordId, ToSql};
 
 impl Database {
     /// Create a new agent template in the database
@@ -33,7 +33,7 @@ impl Database {
     /// let id = db.create_template(&template).await?;
     /// println!("Created template with ID: {}", id);
     /// ```
-    pub async fn create_template(&self, template: &AgentTemplate) -> Result<String, String> {
+    pub async fn create_template(&self, template: &AgentTemplate) -> Result<RecordId, String> {
         // Use .create() for type-safe insertion
         // Returns Option<T> with created record containing generated ID
         // Clone template to satisfy 'static lifetime requirement for async
@@ -46,7 +46,7 @@ impl Database {
 
         // Extract ID from created record
         result
-            .map(|t| t.id.0.to_sql())
+            .map(|t| t.id.clone())
             .ok_or_else(|| "Create returned empty result".to_string())
     }
 
@@ -67,16 +67,16 @@ impl Database {
     /// let template = db.get_template("abc123").await?;
     /// println!("Template: {} using {}", template.name, template.model);
     /// ```
-    pub async fn get_template(&self, id: &str) -> Result<AgentTemplate, String> {
-        // .select() with tuple returns Option<T>
+    pub async fn get_template(&self, id: &RecordId) -> Result<AgentTemplate, String> {
+        // .select() with RecordId returns Option<T>
         let template: Option<AgentTemplate> = self
             .client()
-            .select(("agent_template", id))
+            .select(id)
             .await
             .map_err(|e| format!("Failed to get template: {}", e))?;
 
         // Convert Option to Result with descriptive error
-        template.ok_or_else(|| format!("Template not found: {}", id))
+        template.ok_or_else(|| format!("Template not found: {}", id.to_sql()))
     }
 
     /// List all agent templates in the database
@@ -137,12 +137,9 @@ impl Database {
     /// ```
     pub async fn update_template(&self, template: &AgentTemplate) -> Result<(), String> {
         // .update() with content performs full record replacement
-        // Clone template to satisfy 'static lifetime requirement for async
-        let template_id = template.id.0.clone();
-        let template_id_str = template_id.to_sql();
         let updated: Option<AgentTemplate> = self
             .client()
-            .update(("agent_template", template_id_str.as_str()))
+            .update(&template.id)
             .content(template.clone())
             .await
             .map_err(|e| format!("Failed to update template: {}", e))?;
@@ -150,7 +147,7 @@ impl Database {
         // Validate that record existed and was updated
         updated
             .map(|_| ())
-            .ok_or_else(|| format!("Template not found: {}", template_id.to_sql()))
+            .ok_or_else(|| format!("Template not found: {}", template.id.to_sql()))
     }
 
     /// Delete an agent template by ID
@@ -174,18 +171,18 @@ impl Database {
     /// db.delete_template("abc123").await?;
     /// println!("Template deleted successfully");
     /// ```
-    pub async fn delete_template(&self, id: &str) -> Result<(), String> {
+    pub async fn delete_template(&self, id: &RecordId) -> Result<(), String> {
         // .delete() removes record and returns it (Option<T>)
         let deleted: Option<AgentTemplate> = self
             .client()
-            .delete(("agent_template", id))
+            .delete(id)
             .await
             .map_err(|e| format!("Failed to delete template: {}", e))?;
 
         // Validate that record existed and was deleted
         deleted
             .map(|_| ())
-            .ok_or_else(|| format!("Template not found: {}", id))
+            .ok_or_else(|| format!("Template not found: {}", id.to_sql()))
     }
 
     /// Alias for list_templates (matches Model API naming)

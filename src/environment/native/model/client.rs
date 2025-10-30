@@ -3,10 +3,9 @@
 use super::archive_manager::StatusArchiveManager;
 use super::types::{Model, ModelError};
 use crate::environment::model::Status;
-use crate::view_model::conversation::ConversationId;
 use crate::view_model::conversation::{Conversation, ConversationSummary};
-use crate::view_model::message::{AuthorType, Message, MessageId, MessageType};
-use surrealdb_types::ToSql;
+use crate::view_model::message::{AuthorType, Message, MessageType};
+use surrealdb_types::{RecordId, ToSql};
 
 use megalodon::entities::StatusVisibility;
 
@@ -681,7 +680,7 @@ fn convert_serialized_to_message(
     serialized: &kodegen_tools_claude_agent::types::agent::SerializedMessage,
     conversation_id: &str,
 ) -> Option<crate::view_model::Message> {
-    use crate::view_model::{AuthorType, ConversationId, Message, MessageId, MessageType};
+    use crate::view_model::{AuthorType, Message, MessageType};
 
     // Determine author, author_type, and message_type based on serialized.message_type
     let (author, author_type, message_type) = match serialized.message_type.as_str() {
@@ -739,8 +738,8 @@ fn convert_serialized_to_message(
     let content = extract_message_content(serialized)?;
 
     Some(Message {
-        id: MessageId(surrealdb_types::RecordId::new("message", uuid::Uuid::new_v4().to_string())),
-        conversation_id: ConversationId::from(conversation_id),
+        id: RecordId::new("message", &uuid::Uuid::new_v4().to_string()),
+        conversation_id: RecordId::from_table_key("conversation", conversation_id),
         author,
         author_type,
         content,

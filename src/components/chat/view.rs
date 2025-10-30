@@ -3,7 +3,7 @@ use crate::components::chat::mention_input::MentionInput;
 use crate::constants::ui_text;
 use crate::environment::Environment;
 use crate::services::{agent_chat, mention_parser};
-use crate::view_model::agent::{AgentModel, AgentTemplate, AgentTemplateId};
+use crate::view_model::agent::{AgentModel, AgentTemplate};
 use crate::view_model::conversation::Conversation;
 
 use crate::widgets::ErrorBox;
@@ -11,10 +11,10 @@ use dioxus::prelude::*;
 use futures_util::StreamExt;
 use std::collections::HashSet;
 use surrealdb::Notification;
-use surrealdb_types::{Action, ToSql};
+use surrealdb_types::{Action, RecordId, ToSql};
 
 #[component]
-fn PinnedBanner(conversation_id: String) -> Element {
+fn PinnedBanner(conversation_id: RecordId) -> Element {
     let environment = use_context::<Environment>();
     let database = environment.database.clone();
     
@@ -78,11 +78,11 @@ pub fn ChatComponent() -> Element {
     let environment = use_context::<Environment>();
     
     // Get selected conversation ID from context (provided by LoggedInApp)
-    let conversation_id = match try_use_context::<Signal<String>>() {
+    let conversation_id = match try_use_context::<Signal<RecordId>>() {
         Some(id) => id,
         None => {
             // Fallback to default if context not available
-            use_signal(|| "conversation:default_chat".to_string())
+            use_signal(|| RecordId::new("conversation", "default_chat"))
         }
     };
 
@@ -128,18 +128,18 @@ pub fn ChatComponent() -> Element {
                 // Check if selected conversation exists
                 match database.get_conversation(&current_id).await {
                     Ok(_) => {
-                        log::debug!("[Chat] Conversation exists: {}", current_id);
+                        log::debug!("[Chat] Conversation exists: {}", current_id.to_sql());
                         
                         // Mark all messages in this conversation as read
                         if let Err(e) = database.mark_messages_read(&current_id).await {
                             log::error!("[Chat] Failed to mark messages read: {}", e);
                         } else {
-                            log::debug!("[Chat] Marked messages read for: {}", current_id);
+                            log::debug!("[Chat] Marked messages read for: {}", current_id.to_sql());
                         }
                     }
                     Err(_) => {
                         // Conversation doesn't exist - create it
-                        log::info!("[Chat] Creating conversation: {}", current_id);
+                        log::info!("[Chat] Creating conversation: {}", current_id.to_sql());
 
                         // Get or create default template
                         let template_id = match ensure_default_template(&database).await {
@@ -151,8 +151,8 @@ pub fn ChatComponent() -> Element {
                         };
 
                         // Generate unique ID if using default placeholder
-                        let new_conversation_id = if current_id == "conversation:default_chat" {
-                            format!("conversation:{}", uuid::Uuid::new_v4().to_string().replace("-", ""))
+                        let new_conversation_id = if current_id == RecordId::new("conversation", "default_chat") {
+                            RecordId::new("conversation", &uuid::Uuid::new_v4().to_string().replace("-", ""))
                         } else {
                             current_id.clone()
                         };
@@ -160,9 +160,9 @@ pub fn ChatComponent() -> Element {
                         // Create conversation
                         let now = chrono::Utc::now();
                         let conversation = Conversation {
-                            id: new_conversation_id.clone().into(),
+                            id: new_conversation_id.clone(),
                             title: "Chat with CYRUP".to_string(),
-                            participants: vec![template_id.into()],
+                            participants: vec![template_id],
                             summary: "General conversation with AI assistant".to_string(),
                             agent_sessions: std::collections::HashMap::new(), // Lazy spawn on first message
                             last_summarized_message_id: None,
@@ -172,7 +172,7 @@ pub fn ChatComponent() -> Element {
 
                         match database.create_conversation(&conversation).await {
                             Ok(id) => {
-                                log::info!("[Chat] Created conversation: {}", id);
+                                log::info!("[Chat] Created conversation: {}", id.to_sql());
                                 // Update the signal to match the actual created ID
                                 conversation_id.set(id);
                             }
@@ -201,7 +201,7 @@ pub fn ChatComponent() -> Element {
                 }
 
                 // STEP 1: Start LIVE QUERY FIRST to prevent race condition
-                log::info!("[Chat] Starting LIVE QUERY subscription for: {}", current_id);
+                log::info!("[Chat] Starting LIVE QUERY subscription for: {}", current_id.to_sql());
 
                 // Start LIVE QUERY
                 let stream_result = database
@@ -231,7 +231,7 @@ pub fn ChatComponent() -> Element {
                 log::info!("[Chat] LIVE QUERY subscription active");
 
                 // STEP 2: NOW load existing messages (after LIVE QUERY is active)
-                log::info!("[Chat] Loading existing messages for conversation: {}", current_id);
+                log::info!("[Chat] Loading existing messages for conversation: {}", current_id.to_sql());
                 match database.get_all_messages(&current_id).await {
                     Ok(db_messages) => {
                         let chat_messages: Vec<ChatMessage> = db_messages
@@ -292,9 +292,9 @@ pub fn ChatComponent() -> Element {
                                 }
                                 Action::Delete => {
                                     // Message deleted - remove from list
-                                    log::debug!("[Chat] LIVE QUERY: Message deleted - {}", message_data.id.0.to_sql());
+                                    log::debug!("[Chat] LIVE QUERY: Message deleted - {}", message_data.id.to_sql());
                                     let mut msgs = messages.write();
-                                    msgs.retain(|m| m.id != message_data.id.0.to_sql());
+                                    msgs.retain(|m| m.id != message_data.id.to_sql());
                                 }
                                 _ => {}
                             }
@@ -416,7 +416,7 @@ pub fn ChatComponent() -> Element {
                     Ok(messages) => {
                         let ids: HashSet<String> = messages
                             .into_iter()
-                            .map(|msg| msg.id.0.to_sql())
+                            .map(|msg| msg.id.to_sql())
                             .collect();
                         bookmarked_msg_ids.set(ids);
                         log::debug!("[Chat] Loaded {} bookmarked messages", bookmarked_msg_ids.read().len());
@@ -1152,20 +1152,20 @@ fn ChatMessageView(
 /// Returns template_id of default template
 async fn ensure_default_template(
     database: &std::sync::Arc<crate::database::Database>,
-) -> Result<String, String> {
+) -> Result<RecordId, String> {
     // Try to get any existing template
     let templates = database.list_agent_templates().await?;
 
     if let Some(template) = templates.first() {
-        log::debug!("[Chat] Using existing template: {}", template.id);
-        return Ok(template.id.0.to_sql());
+        log::debug!("[Chat] Using existing template: {}", template.id.to_sql());
+        return Ok(template.id.clone());
     }
 
     // No templates exist - create default
     log::info!("[Chat] Creating default template");
 
     let default_template = AgentTemplate {
-        id: AgentTemplateId(surrealdb_types::RecordId::new("agent_template", "default")),
+        id: RecordId::new("agent_template", "default"),
         name: "CYRUP Assistant".to_string(),
         system_prompt:
             "You are CYRUP, a helpful AI assistant. Provide clear, concise, and accurate responses."
@@ -1177,6 +1177,6 @@ async fn ensure_default_template(
         created_at: chrono::Utc::now(),
     };
 
-    database.create_template(&default_template).await?;
-    Ok(default_template.id.0.to_sql())
+    let created_id = database.create_template(&default_template).await?;
+    Ok(created_id)
 }

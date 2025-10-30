@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
+use surrealdb_types::RecordId;
 
 use crate::database::Database;
 
@@ -74,7 +75,7 @@ pub struct SummarizerOutput {
 pub struct SummarizerService {
     /// Database connection
     db: Arc<Database>,
-    /// Rate limiters per conversation_id
+    /// Rate limiters per conversation_id (using string for HashMap key)
     rate_limiters: Mutex<HashMap<String, RateLimiter>>,
 }
 
@@ -105,12 +106,14 @@ impl SummarizerService {
     /// returns Ok(None) immediately without spawning agent.
     pub async fn maybe_summarize(
         &self,
-        conversation_id: &str,
+        conversation_id: &RecordId,
     ) -> Result<Option<SummarizerOutput>, String> {
+        let conversation_id_str = conversation_id.to_sql();
+        
         // Check rate limit
         let mut limiters = self.rate_limiters.lock().await;
         let limiter = limiters
-            .entry(conversation_id.to_string())
+            .entry(conversation_id_str.clone())
             .or_insert_with(RateLimiter::new);
 
         if !limiter.can_run() {
@@ -125,7 +128,7 @@ impl SummarizerService {
 
         // Mark finished (even if failed)
         let mut limiters = self.rate_limiters.lock().await;
-        if let Some(limiter) = limiters.get_mut(conversation_id) {
+        if let Some(limiter) = limiters.get_mut(&conversation_id_str) {
             limiter.mark_finished();
         }
 
@@ -147,7 +150,7 @@ impl SummarizerService {
     /// - Agent spawn fails
     /// - Response parsing fails
     /// - Database update fails
-    async fn run_summarizer(&self, conversation_id: &str) -> Result<SummarizerOutput, String> {
+    async fn run_summarizer(&self, conversation_id: &RecordId) -> Result<SummarizerOutput, String> {
         // Get conversation and messages
         let conversation = self
             .db

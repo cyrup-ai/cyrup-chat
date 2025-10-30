@@ -210,7 +210,7 @@ pub async fn build_conversation(model: &Model, status_id: String) -> Result<Conv
 
     // Map message IDs to tree node IDs for threading
     let mut ids = HashMap::new();
-    ids.insert(&root_message.id.0, root_id);
+    ids.insert(&root_message.id, root_id);
 
     // Build threaded tree from remaining messages
     for message in messages.iter() {
@@ -222,22 +222,22 @@ pub async fn build_conversation(model: &Model, status_id: String) -> Result<Conv
         // Find parent node ID from in_reply_to relationship
         let Some(reply_to) = message.in_reply_to.as_ref() else {
             // No reply_to means this is orphaned - skip
-            log::warn!("Orphaned message {:?} with no in_reply_to", message.id.0);
+            log::warn!("Orphaned message {:?} with no in_reply_to", message.id);
             continue;
         };
 
-        let Some(parent_node_id) = ids.get(&reply_to.0) else {
-            log::error!("Could not resolve reply-to for message {:?}", message.id.0);
+        let Some(parent_node_id) = ids.get(reply_to) else {
+            log::error!("Could not resolve reply-to for message {:?}", message.id);
             continue;
         };
 
         let view_model = message_to_status_view_model(message);
         let Ok(child_id) = tree.insert(Node::new(view_model), UnderNode(parent_node_id)) else {
-            log::error!("Could not insert message into tree {:?}", message.id.0);
+            log::error!("Could not insert message into tree {:?}", message.id);
             continue;
         };
 
-        ids.insert(&message.id.0, child_id.clone());
+        ids.insert(&message.id, child_id.clone());
     }
 
     let conv = Conversation {
