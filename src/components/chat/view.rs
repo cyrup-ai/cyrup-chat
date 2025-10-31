@@ -989,31 +989,37 @@ fn ChatMessageView(
     rsx! {
         div {
             id: "message-{message.id}",
-            class: "group relative flex flex-col px-5 py-4 rounded-xl max-w-[70%] animate-[slideIn_0.3s_ease-out] {sender_classes} {indent_class}",
+            class: "group relative flex flex-col px-4 py-3 rounded-lg w-full {sender_classes} {indent_class}",
 
-            // Unread indicator dot
-            if message.unread {
+            div {
+                class: "flex justify-between items-center mb-1.5",
                 div {
-                    class: "absolute top-2 left-2 flex items-center gap-2 z-10",
-                    div {
-                        class: "w-2 h-2 bg-blue-500 rounded-full animate-pulse",
-                        title: "Unread message"
-                    }
+                    class: "flex items-center gap-2",
                     span {
-                        class: "text-xs text-blue-400 font-semibold",
-                        "NEW"
+                        class: "text-sm font-semibold opacity-80",
+                        "{sender_icon}{sender_name}"
                     }
+                    if message.unread {
+                        span {
+                            class: "text-[10px] px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded font-semibold",
+                            "NEW"
+                        }
+                    }
+                }
+                span {
+                    class: "text-xs opacity-50",
+                    {message.timestamp.format("%H:%M").to_string()}
                 }
             }
 
-            // Pin and Reaction buttons (visible on hover)
+            // Action buttons (visible on hover)
             div {
-                class: "absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex gap-2",
+                class: "absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex gap-1",
                 button {
                     class: if message_pinned {
-                        "px-2 py-1 bg-gradient-to-br from-[#0078ff]/30 to-[#00a8ff]/30 border border-[#00a8ff]/50 rounded text-white cursor-pointer transition-all duration-200 hover:from-[#0078ff]/40 hover:to-[#00a8ff]/40"
+                        "p-1.5 bg-blue-500/20 rounded text-white text-xs hover:bg-blue-500/30"
                     } else {
-                        "px-2 py-1 bg-white/5 border border-white/10 rounded text-white/50 cursor-pointer transition-all duration-200 hover:bg-white/10 hover:border-white/20 hover:text-white"
+                        "p-1.5 bg-white/5 rounded text-white/40 text-xs hover:bg-white/10 hover:text-white/70"
                     },
                     onclick: move |_| {
                         let message_id = message_id_for_pin.clone();
@@ -1034,9 +1040,9 @@ fn ChatMessageView(
                 }
                 button {
                     class: if message_is_bookmarked {
-                        "px-2 py-1 bg-gradient-to-br from-[#0078ff]/30 to-[#00a8ff]/30 border border-[#00a8ff]/50 rounded text-white cursor-pointer transition-all duration-200 hover:from-[#0078ff]/40 hover:to-[#00a8ff]/40"
+                        "p-1.5 bg-blue-500/20 rounded text-white text-xs hover:bg-blue-500/30"
                     } else {
-                        "px-2 py-1 bg-white/5 border border-white/10 rounded text-white/50 cursor-pointer transition-all duration-200 hover:bg-white/10 hover:border-white/20 hover:text-white"
+                        "p-1.5 bg-white/5 rounded text-white/40 text-xs hover:bg-white/10 hover:text-white/70"
                     },
                     onclick: move |_| {
                         let message_id = message_id_for_bookmark.clone();
@@ -1075,7 +1081,7 @@ fn ChatMessageView(
                     }
                 }
                 button {
-                    class: "px-2 py-1 bg-white/5 border border-white/10 rounded text-white/70 cursor-pointer transition-all duration-200 hover:bg-white/10 hover:border-white/20 hover:text-white",
+                    class: "p-1.5 bg-white/5 rounded text-white/40 text-xs hover:bg-white/10 hover:text-white/70",
                     onclick: move |_| {
                         let current = *show_emoji_picker.read();
                         show_emoji_picker.set(!current);
@@ -1087,9 +1093,9 @@ fn ChatMessageView(
             // Delete button (visible on hover, only for user messages)
             if matches!(message.sender, MessageSender::User) {
                 div {
-                    class: "absolute top-2 right-12 opacity-0 group-hover:opacity-100 transition-opacity duration-200",
+                    class: "absolute bottom-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200",
                     button {
-                        class: "px-2 py-1 bg-red-500/20 border border-red-500/50 rounded text-white/70 cursor-pointer transition-all duration-200 hover:bg-red-500/30 hover:border-red-500 hover:text-white",
+                        class: "p-1.5 bg-red-500/20 rounded text-white/60 text-xs hover:bg-red-500/30 hover:text-white",
                         onclick: move |_| {
                             let message_id = message_id_for_delete.clone();
                             show_delete_confirmation.set(Some(message_id));
@@ -1099,28 +1105,16 @@ fn ChatMessageView(
                 }
             }
 
-            div {
-                class: "flex justify-between mb-2 text-[0.85em] opacity-70",
-                span {
-                    class: "font-semibold",
-                    "{sender_icon}{sender_name}"
-                }
-                span {
-                    class: "text-[0.9em]",
-                    {message.timestamp.format("%H:%M").to_string()}
-                }
-            }
-
             // Show "Reply to [author]" if this is a reply
             if let Some(reply_author) = message.reply_to_author.as_ref() {
                 div {
-                    class: "text-xs text-white/50 mb-1 italic",
+                    class: "text-xs opacity-60 mb-2 italic",
                     "↩️ Reply to {reply_author}"
                 }
             }
 
             div {
-                class: "text-[var(--g-labelColor)] leading-relaxed whitespace-pre-wrap",
+                class: "text-[var(--g-labelColor)] leading-relaxed whitespace-pre-wrap text-sm",
                 "{message.content}"
             }
 

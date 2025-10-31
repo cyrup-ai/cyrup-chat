@@ -380,15 +380,16 @@ impl Database {
             .await
             .map_err(|_| format!("Invalid agent_id: {}", agent_id.to_sql()))?;
 
-        let query = r"
-            UPDATE conversation
-            SET agent_sessions[$agent_id] = $session
-            WHERE id = $conversation_id
-        ";
+        // Use string concatenation for the key since SurrealDB doesn't support
+        // parameterized object keys in bracket notation
+        let agent_key = agent_id.to_sql();
+        let query = format!(
+            r"UPDATE conversation SET agent_sessions.{} = $session WHERE id = $conversation_id",
+            agent_key.replace(":", "_")
+        );
 
         self.client()
             .query(query)
-            .bind(("agent_id", agent_id.to_sql()))
             .bind(("session", session_id.to_string()))
             .bind(("conversation_id", conversation_id.clone()))
             .await
