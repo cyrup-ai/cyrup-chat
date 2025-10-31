@@ -10,6 +10,7 @@ use crate::widgets::*;
 pub fn TimelineComponent(store: TimelineSignal) -> Element {
     log::trace!("Rerender TimelineComponent");
 
+    let environment = use_environment();
     let state = store.read();
 
     rsx! {
@@ -42,7 +43,7 @@ pub fn TimelineComponent(store: TimelineSignal) -> Element {
                         // Use the proper Post component for rendering timeline posts
                         crate::components::post::PostView {
                             store: use_signal(|| crate::components::post::State::from_status(post.clone())),
-                            environment: crate::app::use_environment(),
+                            environment: environment,
                         }
                     }
                 }
