@@ -42,7 +42,7 @@ pub async fn init_schema(db: &Surreal<Db>) -> Result<(), String> {
         r#"
         DEFINE TABLE conversation SCHEMAFULL;
         DEFINE FIELD title ON conversation TYPE string;
-        DEFINE FIELD participants ON conversation TYPE array<string> ASSERT array::len($value) > 0 AND array::len($value) <= 50;
+        DEFINE FIELD participants ON conversation TYPE array<record<agent_template>> ASSERT array::len($value) > 0 AND array::len($value) <= 50;
         DEFINE FIELD summary ON conversation TYPE string DEFAULT "";
         DEFINE FIELD agent_sessions ON conversation TYPE object DEFAULT {};
         DEFINE FIELD last_summarized_message_id ON conversation TYPE option<record<message>>;

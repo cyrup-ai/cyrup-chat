@@ -5,15 +5,14 @@
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use surrealdb_types::{Datetime, RecordId, SurrealValue};
 use std::collections::HashMap;
-
+use surrealdb_types::{Datetime, RecordId, SurrealValue};
 
 /// Full conversation data structure (unified 1:N agent support)
 ///
 /// Database mapping (src/database/schema.rs:39-55):
 /// - title → title (string)
-/// - participants → participants (array<string>) ← NEW: 1 or more agent template IDs
+/// - participants → participants (array<record<agent_template>>) ← 1 or more agent template IDs
 /// - summary → summary (string, default "")
 /// - agent_sessions → agent_sessions (object) ← NEW: HashMap<agent_id, session_id>
 /// - last_summarized_message_id → last_summarized_message_id (option<record<message>>)
