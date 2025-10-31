@@ -47,9 +47,9 @@ pub enum AgentModel {
 impl std::fmt::Display for AgentModel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AgentModel::Sonnet => write!(f, "Claude 3.5 Sonnet"),
-            AgentModel::Haiku => write!(f, "Claude 3 Haiku"),
-            AgentModel::Opus => write!(f, "Claude 3 Opus"),
+            AgentModel::Sonnet => write!(f, "sonnet"),
+            AgentModel::Haiku => write!(f, "haiku"),
+            AgentModel::Opus => write!(f, "opus"),
         }
     }
 }

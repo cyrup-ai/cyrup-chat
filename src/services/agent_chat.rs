@@ -9,12 +9,12 @@
 use crate::database::Database;
 use crate::view_model::message::{AuthorType, Message, MessageType};
 use flume::{Receiver, Sender, unbounded};
-use surrealdb_types::{RecordId, ToSql};
-use futures_util::stream::{FuturesUnordered, StreamExt};  // For concurrent agent execution
+use futures_util::stream::{FuturesUnordered, StreamExt}; // For concurrent agent execution
 use kodegen_tools_claude_agent::{
     ClaudeAgentOptions, ClaudeSDKClient, ContentBlock, Message as AgentMessage, SystemPrompt,
 };
 use std::sync::{Arc, OnceLock};
+use surrealdb_types::{RecordId, ToSql};
 use tokio::time::{Duration, Instant};
 
 /// Global event channel for broadcasting agent tool-use events to UI
@@ -152,7 +152,7 @@ async fn send_to_single_agent(
 
     // Create ClaudeSDKClient (fresh subprocess each time)
     let options = ClaudeAgentOptions {
-        model: Some(template.model.to_string().to_lowercase()),
+        model: Some(template.model.to_string()),
         system_prompt: Some(SystemPrompt::String(template.system_prompt.clone())),
         max_turns: Some(template.max_turns),
         // Enable core development tools
@@ -204,10 +204,7 @@ async fn send_to_multiple_agents(
     target_agents: Vec<RecordId>,
     agent_sessions: std::collections::HashMap<String, String>,
 ) -> Result<(), String> {
-    log::info!(
-        "[Chat] Multi-agent mode: {} agents",
-        target_agents.len()
-    );
+    log::info!("[Chat] Multi-agent mode: {} agents", target_agents.len());
 
     // Spawn concurrent agent tasks
     let mut agent_tasks = FuturesUnordered::new();
@@ -242,15 +239,19 @@ async fn send_to_multiple_agents(
                     "WebSearch".into(),
                 ],
                 // Resume from previous session if exists
-                resume: existing_session_id
-                    .as_ref()
-                    .map(|id| kodegen_tools_claude_agent::types::identifiers::SessionId::from(id.as_str())),
+                resume: existing_session_id.as_ref().map(|id| {
+                    kodegen_tools_claude_agent::types::identifiers::SessionId::from(id.as_str())
+                }),
                 ..Default::default()
             };
 
-            let mut client = ClaudeSDKClient::new(options, None)
-                .await
-                .map_err(|e| format!("Failed to create Claude client for {}: {}", agent_id.to_sql(), e))?;
+            let mut client = ClaudeSDKClient::new(options, None).await.map_err(|e| {
+                format!(
+                    "Failed to create Claude client for {}: {}",
+                    agent_id.to_sql(),
+                    e
+                )
+            })?;
 
             log::debug!("[Chat] Sending message to agent {}", agent_id.to_sql());
 
@@ -312,7 +313,6 @@ async fn send_to_multiple_agents(
 
     Ok(())
 }
-
 
 /// Stream agent responses and update database
 ///
@@ -458,7 +458,8 @@ async fn stream_agent_responses(
             }) => {
                 // IMPORTANT: Flush any pending updates before completing
                 if let Some(id) = message_id.as_ref()
-                    && chars_since_last_update > 0 {
+                    && chars_since_last_update > 0
+                {
                     match database
                         .update_message_content(id, accumulated_text.clone())
                         .await
@@ -542,7 +543,11 @@ async fn stream_agent_responses(
 
     // Store session_id for next turn (lazy spawn pattern)
     if let Some(sid) = session_id {
-        log::info!("[Chat] Storing session_id for agent {} in conversation {}", agent_id.to_sql(), conversation_id.to_sql());
+        log::info!(
+            "[Chat] Storing session_id for agent {} in conversation {}",
+            agent_id.to_sql(),
+            conversation_id.to_sql()
+        );
         database
             .update_agent_session(&conversation_id, &agent_id, &sid)
             .await?;
