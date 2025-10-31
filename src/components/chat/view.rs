@@ -707,7 +707,7 @@ pub fn ChatComponent() -> Element {
             PinnedBanner { conversation_id: conversation_id.read().clone() }
 
             div {
-                class: "flex-1 overflow-y-auto px-6 py-4 flex flex-col gap-6",
+                class: "flex-1 overflow-y-auto px-6 py-4 flex flex-col gap-2",
                 for message in messages.read().iter() {
                     ChatMessageView {
                         message: message.clone(),
@@ -942,26 +942,18 @@ fn ChatMessageView(
         )
     } else {
         match message.sender {
-            MessageSender::User => (
-                "self-end bg-gradient-to-br from-[#0078ff]/20 to-[#00a8ff]/20 border border-[#00a8ff]/30 [box-shadow:inset_0_0_0_2000px_rgba(0,0,0,0.1)]",
-                "You",
-                "",
-            ),
+            MessageSender::User => ("bg-white/[0.02] border-l-2 border-blue-500/50", "You", ""),
             MessageSender::Cyrup => (
-                "self-start bg-white/5 border border-white/10 [box-shadow:inset_0_0_0_2000px_rgba(0,0,0,0.1)]",
-                "CYRUP",
+                "bg-white/[0.02] border-l-2 border-purple-500/50",
+                "Assistant",
                 "",
             ),
             MessageSender::System => (
-                "self-center bg-yellow-500/10 border border-yellow-500/30 italic",
+                "bg-yellow-500/5 border-l-2 border-yellow-500/50",
                 "System",
-                "ℹ️ ",
+                "",
             ),
-            MessageSender::Tool => (
-                "self-start bg-green-500/10 border border-green-500/30 font-mono text-sm",
-                "Tool",
-                "🔧 ",
-            ),
+            MessageSender::Tool => ("bg-green-500/5 border-l-2 border-green-500/50", "Tool", ""),
         }
     };
 
@@ -989,32 +981,23 @@ fn ChatMessageView(
     rsx! {
         div {
             id: "message-{message.id}",
-            class: "group relative flex flex-col px-4 py-3 rounded-lg w-full {sender_classes} {indent_class}",
+            class: "group relative px-6 py-3 mb-4 w-full {sender_classes} {indent_class} hover:bg-white/[0.01] transition-colors",
 
             div {
-                class: "flex justify-between items-center mb-1.5",
-                div {
-                    class: "flex items-center gap-2",
-                    span {
-                        class: "text-sm font-semibold opacity-80",
-                        "{sender_icon}{sender_name}"
-                    }
-                    if message.unread {
-                        span {
-                            class: "text-[10px] px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded font-semibold",
-                            "NEW"
-                        }
-                    }
+                class: "flex items-baseline gap-3 mb-1",
+                span {
+                    class: "text-sm font-medium text-white/90",
+                    "{sender_name}"
                 }
                 span {
-                    class: "text-xs opacity-50",
+                    class: "text-xs text-white/40",
                     {message.timestamp.format("%H:%M").to_string()}
                 }
             }
 
             // Action buttons (visible on hover)
             div {
-                class: "absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex gap-1",
+                class: "absolute top-2 right-4 opacity-0 group-hover:opacity-100 transition-opacity duration-150 flex gap-1",
                 button {
                     class: if message_pinned {
                         "p-1.5 bg-blue-500/20 rounded text-white text-xs hover:bg-blue-500/30"
@@ -1090,20 +1073,7 @@ fn ChatMessageView(
                 }
             }
 
-            // Delete button (visible on hover, only for user messages)
-            if matches!(message.sender, MessageSender::User) {
-                div {
-                    class: "absolute bottom-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200",
-                    button {
-                        class: "p-1.5 bg-red-500/20 rounded text-white/60 text-xs hover:bg-red-500/30 hover:text-white",
-                        onclick: move |_| {
-                            let message_id = message_id_for_delete.clone();
-                            show_delete_confirmation.set(Some(message_id));
-                        },
-                        "🗑️"
-                    }
-                }
-            }
+
 
             // Show "Reply to [author]" if this is a reply
             if let Some(reply_author) = message.reply_to_author.as_ref() {
@@ -1114,7 +1084,7 @@ fn ChatMessageView(
             }
 
             div {
-                class: "text-[var(--g-labelColor)] leading-relaxed whitespace-pre-wrap text-sm",
+                class: "text-white/80 leading-relaxed whitespace-pre-wrap",
                 "{message.content}"
             }
 
