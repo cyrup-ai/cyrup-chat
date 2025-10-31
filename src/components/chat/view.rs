@@ -927,11 +927,7 @@ fn ChatMessageView(
     mut show_delete_confirmation: Signal<Option<String>>,
 ) -> Element {
     let environment = use_context::<Environment>();
-    let model = environment.model.clone();
     let database = environment.database.clone();
-
-    // State for emoji picker
-    let mut show_emoji_picker = use_signal(|| false);
 
     let (sender_classes, sender_name, _sender_icon) = if message.is_error {
         // Error messages get distinct red styling regardless of sender
@@ -963,9 +959,11 @@ fn ChatMessageView(
         ""
     };
 
-    // Clone fields for reply functionality
-    let message_id_for_reply = message.id.clone();
-    let message_sender = message.sender.clone();
+    // Clone fields for reply and reactions functionality
+    let message_id_for_reply_button = message.id.clone();
+    let message_sender_for_reply = message.sender.clone();
+    let message_id_for_reactions = message.id.clone();
+    let database_for_reactions = database.clone();
 
     rsx! {
         div {
@@ -984,15 +982,18 @@ fn ChatMessageView(
                 }
                 button {
                     class: "ml-auto text-xs text-white/30 hover:text-white/60 opacity-0 group-hover:opacity-100 transition-opacity",
-                    onclick: move |_| {
-                        let message_id = message_id_for_reply.clone();
-                        let author = match message_sender {
-                            MessageSender::User => "You".to_string(),
-                            MessageSender::Cyrup => "Assistant".to_string(),
-                            MessageSender::System => "System".to_string(),
-                            MessageSender::Tool => "Tool".to_string(),
-                        };
-                        on_reply.call((message_id, author));
+                    onclick: {
+                        let message_id = message_id_for_reply_button.clone();
+                        let sender = message_sender_for_reply.clone();
+                        move |_| {
+                            let author = match sender {
+                                MessageSender::User => "You".to_string(),
+                                MessageSender::Cyrup => "Assistant".to_string(),
+                                MessageSender::System => "System".to_string(),
+                                MessageSender::Tool => "Tool".to_string(),
+                            };
+                            on_reply.call((message_id.clone(), author));
+                        }
                     },
                     "Reply"
                 }
@@ -1009,61 +1010,6 @@ fn ChatMessageView(
             div {
                 class: "text-white/80 leading-relaxed whitespace-pre-wrap",
                 "{message.content}"
-            }
-
-            // Emoji picker (conditional render)
-            if *show_emoji_picker.read() {
-                div {
-                    class: "mt-2 p-3 bg-gradient-to-br from-[#1a1a2e]/95 to-[#16213e]/95 border border-white/20 rounded-lg shadow-xl backdrop-blur-sm",
-                    div {
-                        class: "grid grid-cols-5 gap-2",
-                        for emoji in ["👍", "❤️", "😂", "🎯", "✅", "🔥", "👏", "🙌"] {
-                            {
-                                let emoji_str = emoji.to_string();
-                                let message_id = message_id_for_emoji_picker.clone();
-                                let database = database_for_emoji_picker.clone();
-
-                                rsx! {
-                                    button {
-                                        class: "text-2xl hover:scale-125 transition-transform cursor-pointer p-2 hover:bg-white/10 rounded",
-                                        onclick: move |_| {
-                                            let emoji_str = emoji_str.clone();
-                                            let message_id = message_id.clone();
-                                            let database = database.clone();
-
-                                    spawn(async move {
-                                        let user_id = "hardcoded-david-maple";
-
-                                        // Check if user already reacted with this emoji
-                                        let reactions = database.get_message_reactions(&message_id).await
-                                            .unwrap_or_default();
-
-                                        let already_reacted = reactions.iter()
-                                            .any(|r| r.user_id == user_id && r.emoji == emoji_str);
-
-                                        if already_reacted {
-                                            // Remove reaction
-                                            if let Err(e) = database.remove_reaction(&message_id, user_id, &emoji_str).await {
-                                                log::error!("Failed to remove reaction: {}", e);
-                                            }
-                                        } else {
-                                            // Add reaction
-                                            if let Err(e) = database.add_reaction(&message_id, user_id, &emoji_str).await {
-                                                log::error!("Failed to add reaction: {}", e);
-                                            }
-                                        }
-                                    });
-
-                                            // Close picker after selection
-                                            show_emoji_picker.set(false);
-                                        },
-                                        "{emoji_str}"
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
             }
 
             // Reaction display
@@ -1116,20 +1062,7 @@ fn ChatMessageView(
             }
 
             // Reply button (only show for User and Cyrup messages)
-            if !matches!(message.sender, MessageSender::System | MessageSender::Tool) {
-                button {
-                    class: "mt-2 text-xs text-white/50 hover:text-white/80 transition-colors self-start",
-                    onclick: move |_| {
-                        let author = match message_sender {
-                            MessageSender::User => "You",
-                            MessageSender::Cyrup => "CYRUP",
-                            _ => "Unknown"
-                        };
-                        on_reply.call((message_id_for_reply.clone(), author.to_string()));
-                    },
-                    "Reply"
-                }
-            }
+
         }
     }
 }
