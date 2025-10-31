@@ -17,14 +17,19 @@ use surrealdb_types::{Action, RecordId, ToSql};
 fn PinnedBanner(conversation_id: RecordId) -> Element {
     let environment = use_context::<Environment>();
     let database = environment.database.clone();
-    
+
     // Fetch pinned messages
     let pinned_messages = use_resource(move || {
         let database = database.clone();
         let conv_id = conversation_id.clone();
         async move {
             let db_messages = database.get_pinned_messages(&conv_id).await.ok()?;
-            Some(db_messages.into_iter().map(ChatMessage::from_db_message).collect::<Vec<_>>())
+            Some(
+                db_messages
+                    .into_iter()
+                    .map(ChatMessage::from_db_message)
+                    .collect::<Vec<_>>(),
+            )
         }
     });
 
@@ -45,7 +50,7 @@ fn PinnedBanner(conversation_id: RecordId) -> Element {
                             let msg_id = message.id.clone();
                             let timestamp_str = message.timestamp.format("%H:%M").to_string();
                             let content_str = message.content.clone();
-                            
+
                             rsx! {
                                 div {
                                     key: "{msg_id}",
@@ -76,7 +81,7 @@ fn PinnedBanner(conversation_id: RecordId) -> Element {
 pub fn ChatComponent() -> Element {
     // Get environment from context (provided by App component)
     let environment = use_context::<Environment>();
-    
+
     // Get selected conversation ID from context (provided by LoggedInApp)
     let conversation_id = match try_use_context::<Signal<RecordId>>() {
         Some(id) => id,
@@ -91,21 +96,18 @@ pub fn ChatComponent() -> Element {
     let mut is_sending = use_signal(|| false);
     let mut send_error = use_signal(|| Option::<String>::None);
     let mut active_tool = use_signal(|| Option::<String>::None);
-    
+
     // Reply state tracking
     let mut replying_to = use_signal(|| Option::<(String, String)>::None);
-    
+
     // Bookmark state tracking
     let bookmarked_msg_ids = use_signal(HashSet::<String>::new);
-    
+
     // Delete confirmation state tracking
     let mut show_delete_confirmation = use_signal(|| Option::<String>::None);
-    
+
     // Track whether we've scrolled to first unread (one-time per conversation open)
     let mut has_scrolled_to_unread = use_signal(|| false);
-    
-    // Track whether conversation is ready (bootstrap complete)
-    let conversation_ready = use_signal(|| false);
 
     // Load conversation to check participant count for conditional input rendering
     let conversation_for_input = {
@@ -113,9 +115,7 @@ pub fn ChatComponent() -> Element {
         use_resource(move || {
             let database = database.clone();
             let conv_id = conversation_id.read().clone();
-            async move {
-                database.get_conversation(&conv_id).await.ok()
-            }
+            async move { database.get_conversation(&conv_id).await.ok() }
         })
     };
 
@@ -123,27 +123,22 @@ pub fn ChatComponent() -> Element {
     use_future({
         let database = environment.database.clone();
         let conversation_id = conversation_id;
-        let conversation_ready = conversation_ready;
         move || {
             let database = database.clone();
             let mut conversation_id = conversation_id;
-            let mut conversation_ready = conversation_ready;
             async move {
                 let current_id = conversation_id.read().clone();
                 // Check if selected conversation exists
                 match database.get_conversation(&current_id).await {
                     Ok(_) => {
                         log::debug!("[Chat] Conversation exists: {}", current_id.to_sql());
-                        
+
                         // Mark all messages in this conversation as read
                         if let Err(e) = database.mark_messages_read(&current_id).await {
                             log::error!("[Chat] Failed to mark messages read: {}", e);
                         } else {
                             log::debug!("[Chat] Marked messages read for: {}", current_id.to_sql());
                         }
-                        
-                        // Mark conversation as ready
-                        conversation_ready.set(true);
                     }
                     Err(_) => {
                         // Conversation doesn't exist - create it
@@ -159,11 +154,15 @@ pub fn ChatComponent() -> Element {
                         };
 
                         // Generate unique ID if using default placeholder
-                        let new_conversation_id = if current_id == RecordId::new("conversation", "default_chat") {
-                            RecordId::new("conversation", uuid::Uuid::new_v4().to_string().replace("-", ""))
-                        } else {
-                            current_id.clone()
-                        };
+                        let new_conversation_id =
+                            if current_id == RecordId::new("conversation", "default_chat") {
+                                RecordId::new(
+                                    "conversation",
+                                    uuid::Uuid::new_v4().to_string().replace("-", ""),
+                                )
+                            } else {
+                                current_id.clone()
+                            };
 
                         // Create conversation
                         let now = chrono::Utc::now();
@@ -183,12 +182,9 @@ pub fn ChatComponent() -> Element {
                                 log::info!("[Chat] Created conversation: {}", id.to_sql());
                                 // Update the signal to match the actual created ID
                                 conversation_id.set(id);
-                                // Mark conversation as ready
-                                conversation_ready.set(true);
                             }
                             Err(e) => {
                                 log::error!("[Chat] Failed to create conversation: {}", e);
-                                // Don't mark as ready on error
                             }
                         }
                     }
@@ -212,7 +208,10 @@ pub fn ChatComponent() -> Element {
                 }
 
                 // STEP 1: Start LIVE QUERY FIRST to prevent race condition
-                log::info!("[Chat] Starting LIVE QUERY subscription for: {}", current_id.to_sql());
+                log::info!(
+                    "[Chat] Starting LIVE QUERY subscription for: {}",
+                    current_id.to_sql()
+                );
 
                 // Start LIVE QUERY
                 let stream_result = database
@@ -242,7 +241,10 @@ pub fn ChatComponent() -> Element {
                 log::info!("[Chat] LIVE QUERY subscription active");
 
                 // STEP 2: NOW load existing messages (after LIVE QUERY is active)
-                log::info!("[Chat] Loading existing messages for conversation: {}", current_id.to_sql());
+                log::info!(
+                    "[Chat] Loading existing messages for conversation: {}",
+                    current_id.to_sql()
+                );
                 match database.get_all_messages(&current_id).await {
                     Ok(db_messages) => {
                         let chat_messages: Vec<ChatMessage> = db_messages
@@ -271,7 +273,7 @@ pub fn ChatComponent() -> Element {
                                 Action::Create => {
                                     // New message - check for duplicates before adding
                                     let chat_msg = ChatMessage::from_db_message(message_data);
-                                    
+
                                     // Deduplication: prevent race condition where message appears in both initial load and LIVE stream
                                     let mut msgs = messages.write();
                                     if !msgs.iter().any(|m| m.id == chat_msg.id) {
@@ -279,7 +281,10 @@ pub fn ChatComponent() -> Element {
                                         msgs.push(chat_msg);
                                         log::debug!("[Chat] LIVE QUERY: New message created");
                                     } else {
-                                        log::trace!("[Chat] Duplicate message ignored: {}", chat_msg.id);
+                                        log::trace!(
+                                            "[Chat] Duplicate message ignored: {}",
+                                            chat_msg.id
+                                        );
                                     }
                                 }
                                 Action::Update => {
@@ -303,7 +308,10 @@ pub fn ChatComponent() -> Element {
                                 }
                                 Action::Delete => {
                                     // Message deleted - remove from list
-                                    log::debug!("[Chat] LIVE QUERY: Message deleted - {}", message_data.id.to_sql());
+                                    log::debug!(
+                                        "[Chat] LIVE QUERY: Message deleted - {}",
+                                        message_data.id.to_sql()
+                                    );
                                     let mut msgs = messages.write();
                                     msgs.retain(|m| m.id != message_data.id.to_sql());
                                 }
@@ -329,17 +337,18 @@ pub fn ChatComponent() -> Element {
         move || {
             let database = database.clone();
             spawn(async move {
-                log::info!("[Chat] Starting reaction LIVE QUERY subscription (global, app-filtered)");
-                
+                log::info!(
+                    "[Chat] Starting reaction LIVE QUERY subscription (global, app-filtered)"
+                );
+
                 // Start LIVE QUERY for reactions
-                let stream_result = database
-                    .client()
-                    .query("LIVE SELECT * FROM reaction")
-                    .await;
-                
+                let stream_result = database.client().query("LIVE SELECT * FROM reaction").await;
+
                 let mut stream = match stream_result {
                     Ok(mut response) => {
-                        match response.stream::<Notification<crate::database::reactions::Reaction>>(0) {
+                        match response
+                            .stream::<Notification<crate::database::reactions::Reaction>>(0)
+                        {
                             Ok(s) => s,
                             Err(e) => {
                                 log::error!("[Chat] Failed to create reaction stream: {}", e);
@@ -352,38 +361,48 @@ pub fn ChatComponent() -> Element {
                         return;
                     }
                 };
-                
-                log::info!("[Chat] Reaction LIVE QUERY subscription active (filtering to {} messages)", messages.read().len());
-                
+
+                log::info!(
+                    "[Chat] Reaction LIVE QUERY subscription active (filtering to {} messages)",
+                    messages.read().len()
+                );
+
                 // Consume notifications
                 while let Some(notification) = stream.next().await {
                     match notification {
                         Ok(notif) => {
                             let reaction = notif.data;
                             let message_id = reaction.message_id.clone();
-                            
+
                             // ✅ FILTER: Only process reactions for messages in this conversation
                             let message_exists = messages.read().iter().any(|m| m.id == message_id);
                             if !message_exists {
-                                log::trace!("[Chat] Ignoring reaction for message not in conversation: {}", message_id);
+                                log::trace!(
+                                    "[Chat] Ignoring reaction for message not in conversation: {}",
+                                    message_id
+                                );
                                 continue; // Skip reactions for other conversations
                             }
-                            
+
                             log::debug!("[Chat] Processing reaction for message: {}", message_id);
-                            
+
                             // Reload reactions for this message
                             match database.get_reaction_counts(&message_id).await {
                                 Ok(counts) => {
                                     // Get full reactions to check user participation
-                                    let full_reactions = database.get_message_reactions(&message_id).await
+                                    let full_reactions = database
+                                        .get_message_reactions(&message_id)
+                                        .await
                                         .unwrap_or_default();
-                                    
+
                                     let user_id = "hardcoded-david-maple";
-                                    
+
                                     // Convert to ReactionSummary
-                                    let reaction_summaries: Vec<ReactionSummary> = counts.into_iter()
+                                    let reaction_summaries: Vec<ReactionSummary> = counts
+                                        .into_iter()
                                         .map(|(emoji, count)| {
-                                            let user_reacted = full_reactions.iter()
+                                            let user_reacted = full_reactions
+                                                .iter()
                                                 .any(|r| r.emoji == emoji && r.user_id == user_id);
                                             ReactionSummary {
                                                 emoji,
@@ -392,10 +411,11 @@ pub fn ChatComponent() -> Element {
                                             }
                                         })
                                         .collect();
-                                    
+
                                     // Update the message in the messages list
                                     let mut msgs = messages.write();
-                                    if let Some(msg) = msgs.iter_mut().find(|m| m.id == message_id) {
+                                    if let Some(msg) = msgs.iter_mut().find(|m| m.id == message_id)
+                                    {
                                         msg.reactions = reaction_summaries;
                                     }
                                 }
@@ -409,7 +429,7 @@ pub fn ChatComponent() -> Element {
                         }
                     }
                 }
-                
+
                 log::warn!("[Chat] Reaction LIVE QUERY stream ended");
             });
         }
@@ -425,12 +445,13 @@ pub fn ChatComponent() -> Element {
                 let user_id = "hardcoded-david-maple";
                 match database.get_bookmarked_messages(user_id).await {
                     Ok(messages) => {
-                        let ids: HashSet<String> = messages
-                            .into_iter()
-                            .map(|msg| msg.id.to_sql())
-                            .collect();
+                        let ids: HashSet<String> =
+                            messages.into_iter().map(|msg| msg.id.to_sql()).collect();
                         bookmarked_msg_ids.set(ids);
-                        log::debug!("[Chat] Loaded {} bookmarked messages", bookmarked_msg_ids.read().len());
+                        log::debug!(
+                            "[Chat] Loaded {} bookmarked messages",
+                            bookmarked_msg_ids.read().len()
+                        );
                     }
                     Err(e) => {
                         log::error!("[Chat] Failed to load bookmarks: {}", e);
@@ -443,10 +464,10 @@ pub fn ChatComponent() -> Element {
     // Watch for conversation ID changes and reset scroll flag
     use_effect(move || {
         let _current_id = conversation_id.read().clone();
-        
+
         // Reset scroll-to-unread flag when conversation changes
         has_scrolled_to_unread.set(false);
-        
+
         // Reset messages (they will be reloaded by LIVE QUERY)
         messages.set(Vec::new());
     });
@@ -455,18 +476,20 @@ pub fn ChatComponent() -> Element {
     use_effect(move || {
         let messages_list = messages.read().clone();
         let scrolled = *has_scrolled_to_unread.read();
-        
+
         // Only scroll once per conversation open, and only if there are unreads
-        if !scrolled && !messages_list.is_empty()
-            && let Some(first_unread) = messages_list.iter().find(|msg| msg.unread) {
+        if !scrolled
+            && !messages_list.is_empty()
+            && let Some(first_unread) = messages_list.iter().find(|msg| msg.unread)
+        {
             let message_id = first_unread.id.clone();
             has_scrolled_to_unread.set(true);
-            
+
             log::debug!("[Chat] Scrolling to first unread: {}", message_id);
-            
+
             spawn(async move {
                 use dioxus::document;
-                
+
                 let script = format!(
                     r#"
                     const element = document.getElementById('message-{}');
@@ -479,7 +502,7 @@ pub fn ChatComponent() -> Element {
                     "#,
                     message_id
                 );
-                
+
                 let eval_result = document::eval(&script);
                 if let Err(e) = eval_result.await {
                     log::warn!("[Chat] Failed to scroll to unread: {}", e);
@@ -498,7 +521,10 @@ pub fn ChatComponent() -> Element {
             is_sending.set(true);
 
             // Capture reply target before clearing
-            let parent_message_id = replying_to.read().as_ref().and_then(|(id, _)| RecordId::parse_simple(id).ok());
+            let parent_message_id = replying_to
+                .read()
+                .as_ref()
+                .and_then(|(id, _)| RecordId::parse_simple(id).ok());
             replying_to.set(None); // Clear reply state after capturing
 
             // Send message via agent_chat service (stateless, database-driven)
@@ -507,9 +533,71 @@ pub fn ChatComponent() -> Element {
                 let content = content.clone();
                 let mut is_sending = is_sending;
                 let mut send_error = send_error;
-                let current_conversation_id = conversation_id.read().clone();
+                let mut conversation_id = conversation_id;
 
                 async move {
+                    // Ensure conversation exists before sending
+                    let mut current_conversation_id = conversation_id.read().clone();
+
+                    // If using default placeholder, generate real ID and create conversation
+                    if current_conversation_id == RecordId::new("conversation", "default_chat") {
+                        let new_id = RecordId::new(
+                            "conversation",
+                            uuid::Uuid::new_v4().to_string().replace("-", ""),
+                        );
+                        current_conversation_id = new_id.clone();
+                        conversation_id.set(new_id);
+                    }
+
+                    // Check if conversation exists, create if not
+                    if database
+                        .get_conversation(&current_conversation_id)
+                        .await
+                        .is_err()
+                    {
+                        // Create conversation
+                        let template_id = match ensure_default_template(&database).await {
+                            Ok(id) => id,
+                            Err(e) => {
+                                log::error!("[Chat] Failed to ensure default template: {}", e);
+                                send_error.set(Some(
+                                    "Failed to initialize chat. Please try again.".to_string(),
+                                ));
+                                is_sending.set(false);
+                                return;
+                            }
+                        };
+
+                        let now = chrono::Utc::now();
+                        let conversation = Conversation {
+                            id: current_conversation_id.clone(),
+                            title: "Chat with CYRUP".to_string(),
+                            participants: vec![template_id],
+                            summary: "General conversation with AI assistant".to_string(),
+                            agent_sessions: std::collections::HashMap::new(),
+                            last_summarized_message_id: None,
+                            last_message_at: now.into(),
+                            created_at: now.into(),
+                        };
+
+                        match database.create_conversation(&conversation).await {
+                            Ok(_) => {
+                                log::info!(
+                                    "[Chat] Created conversation: {}",
+                                    current_conversation_id.to_sql()
+                                );
+                            }
+                            Err(e) => {
+                                log::error!("[Chat] Failed to create conversation: {}", e);
+                                send_error.set(Some(
+                                    "Failed to create conversation. Please try again.".to_string(),
+                                ));
+                                is_sending.set(false);
+                                return;
+                            }
+                        }
+                    }
+
                     match agent_chat::send_message(
                         database,
                         current_conversation_id,
@@ -563,7 +651,7 @@ pub fn ChatComponent() -> Element {
 
     let confirm_delete = move |message_id: String| {
         show_delete_confirmation.set(None);
-        
+
         spawn({
             let model = environment.model.clone();
             async move {
@@ -615,13 +703,13 @@ pub fn ChatComponent() -> Element {
     rsx! {
         div {
             class: "flex flex-col h-screen bg-transparent",
-            
+
             PinnedBanner { conversation_id: conversation_id.read().clone() }
-            
+
             div {
                 class: "flex-1 overflow-y-auto px-6 py-4 flex flex-col gap-6",
                 for message in messages.read().iter() {
-                    ChatMessageView { 
+                    ChatMessageView {
                         message: message.clone(),
                         on_reply: start_reply,
                         bookmarked_msg_ids: bookmarked_msg_ids,
@@ -639,7 +727,7 @@ pub fn ChatComponent() -> Element {
                     }
                 }
             }
-            
+
             // Reply indicator (shows when replying_to is Some)
             if let Some((_, author)) = replying_to.read().as_ref() {
                 div {
@@ -656,23 +744,23 @@ pub fn ChatComponent() -> Element {
                     }
                 }
             }
-            
+
             // Load conversation to check participant count
             {
                 let is_multi_agent = conversation_for_input.read().as_ref()
                     .and_then(|opt| opt.as_ref())
                     .map(|conv| conv.participants.len() > 1)
                     .unwrap_or(false);
-                
+
                 let room_agents = conversation_for_input.read().as_ref()
                     .and_then(|opt| opt.as_ref())
                     .map(|conv| conv.participants.iter().map(|p| p.to_sql()).collect::<Vec<String>>())
                     .unwrap_or_default();
-                
+
                 if is_multi_agent {
                     let database_for_submit = database_for_mention_input.clone();
                     let room_agents_for_submit = room_agents.clone();
-                    
+
                     rsx! {
                         // Multi-agent: Use MentionInput with @mention autocomplete
                         div {
@@ -682,23 +770,23 @@ pub fn ChatComponent() -> Element {
                                 on_submit: move |msg: String| {
                                     // Parse @mentions from message
                                     let mentioned = mention_parser::parse_mentions(&msg);
-                                    
+
                                     // Filter to only participants in this conversation
                                     let valid_mentions: Vec<RecordId> = mentioned
                                         .into_iter()
                                         .filter(|agent_id| room_agents_for_submit.contains(agent_id))
                                         .filter_map(|agent_id| RecordId::parse_simple(&agent_id).ok())
                                         .collect();
-                                    
+
                                     // Send with mentioned_agents parameter
                                     input_value.set(String::new());
                                     is_sending.set(true);
-                                    
+
                                     spawn({
                                         let database = database_for_submit.clone();
                                         let current_conversation_id = conversation_id.read().clone();
                                         let mut is_sending = is_sending;
-                                        
+
                                         async move {
                                             match agent_chat::send_message(
                                                 database,
@@ -714,7 +802,7 @@ pub fn ChatComponent() -> Element {
                                         }
                                     });
                                 },
-                                disabled: *is_sending.read() || !*conversation_ready.read(),
+                                disabled: *is_sending.read(),
                                 room_agents: room_agents,
                             }
                         }
@@ -736,12 +824,12 @@ pub fn ChatComponent() -> Element {
                                     placeholder: ui_text::chat_input_placeholder(),
                                     value: "{input_value.read()}",
                                     oninput: move |e| input_value.set(e.value()),
-                                    disabled: *is_sending.read() || !*conversation_ready.read(),
+                                    disabled: *is_sending.read(),
                                 }
                                 button {
                                     class: "px-8 py-4 bg-gradient-to-r from-[#0078ff] to-[#00a8ff] text-white rounded-xl font-bold cursor-pointer transition-all duration-200 hover:from-[#0088ff] hover:to-[#00b8ff] hover:shadow-[0_4px_20px_rgba(0,168,255,0.4)] hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0",
                                     r#type: "submit",
-                                    disabled: *is_sending.read() || !*conversation_ready.read(),
+                                    disabled: *is_sending.read(),
                                     "Send"
                                 }
                             }
@@ -833,18 +921,18 @@ fn DeleteConfirmationDialog(
 
 #[component]
 fn ChatMessageView(
-    message: ChatMessage, 
+    message: ChatMessage,
     on_reply: EventHandler<(String, String)>,
     bookmarked_msg_ids: Signal<HashSet<String>>,
-    mut show_delete_confirmation: Signal<Option<String>>
+    mut show_delete_confirmation: Signal<Option<String>>,
 ) -> Element {
     let environment = use_context::<Environment>();
     let model = environment.model.clone();
     let database = environment.database.clone();
-    
+
     // State for emoji picker
     let mut show_emoji_picker = use_signal(|| false);
-    
+
     let (sender_classes, sender_name, sender_icon) = if message.is_error {
         // Error messages get distinct red styling regardless of sender
         (
@@ -902,7 +990,7 @@ fn ChatMessageView(
         div {
             id: "message-{message.id}",
             class: "group relative flex flex-col px-5 py-4 rounded-xl max-w-[70%] animate-[slideIn_0.3s_ease-out] {sender_classes} {indent_class}",
-            
+
             // Unread indicator dot
             if message.unread {
                 div {
@@ -917,7 +1005,7 @@ fn ChatMessageView(
                     }
                 }
             }
-            
+
             // Pin and Reaction buttons (visible on hover)
             div {
                 class: "absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex gap-2",
@@ -962,7 +1050,7 @@ fn ChatMessageView(
                             } else {
                                 database.bookmark_message(user_id, &message_id).await.map(|_| ())
                             };
-                            
+
                             match result {
                                 Ok(_) => {
                                     // Update the local state
@@ -995,7 +1083,7 @@ fn ChatMessageView(
                     "😊"
                 }
             }
-            
+
             // Delete button (visible on hover, only for user messages)
             if matches!(message.sender, MessageSender::User) {
                 div {
@@ -1010,7 +1098,7 @@ fn ChatMessageView(
                     }
                 }
             }
-            
+
             div {
                 class: "flex justify-between mb-2 text-[0.85em] opacity-70",
                 span {
@@ -1022,7 +1110,7 @@ fn ChatMessageView(
                     {message.timestamp.format("%H:%M").to_string()}
                 }
             }
-            
+
             // Show "Reply to [author]" if this is a reply
             if let Some(reply_author) = message.reply_to_author.as_ref() {
                 div {
@@ -1030,12 +1118,12 @@ fn ChatMessageView(
                     "↩️ Reply to {reply_author}"
                 }
             }
-            
+
             div {
                 class: "text-[var(--g-labelColor)] leading-relaxed whitespace-pre-wrap",
                 "{message.content}"
             }
-            
+
             // Emoji picker (conditional render)
             if *show_emoji_picker.read() {
                 div {
@@ -1047,7 +1135,7 @@ fn ChatMessageView(
                                 let emoji_str = emoji.to_string();
                                 let message_id = message_id_for_emoji_picker.clone();
                                 let database = database_for_emoji_picker.clone();
-                                
+
                                 rsx! {
                                     button {
                                         class: "text-2xl hover:scale-125 transition-transform cursor-pointer p-2 hover:bg-white/10 rounded",
@@ -1055,17 +1143,17 @@ fn ChatMessageView(
                                             let emoji_str = emoji_str.clone();
                                             let message_id = message_id.clone();
                                             let database = database.clone();
-                                    
+
                                     spawn(async move {
                                         let user_id = "hardcoded-david-maple";
-                                        
+
                                         // Check if user already reacted with this emoji
                                         let reactions = database.get_message_reactions(&message_id).await
                                             .unwrap_or_default();
-                                        
+
                                         let already_reacted = reactions.iter()
                                             .any(|r| r.user_id == user_id && r.emoji == emoji_str);
-                                        
+
                                         if already_reacted {
                                             // Remove reaction
                                             if let Err(e) = database.remove_reaction(&message_id, user_id, &emoji_str).await {
@@ -1078,7 +1166,7 @@ fn ChatMessageView(
                                             }
                                         }
                                     });
-                                            
+
                                             // Close picker after selection
                                             show_emoji_picker.set(false);
                                         },
@@ -1090,7 +1178,7 @@ fn ChatMessageView(
                     }
                 }
             }
-            
+
             // Reaction display
             if !message.reactions.is_empty() {
                 div {
@@ -1102,7 +1190,7 @@ fn ChatMessageView(
                             let user_reacted = reaction.user_reacted;
                             let message_id = message_id_for_reactions.clone();
                             let database = database_for_reactions.clone();
-                            
+
                             rsx! {
                                 button {
                                     class: if user_reacted {
@@ -1114,10 +1202,10 @@ fn ChatMessageView(
                                         let emoji_str = emoji_str.clone();
                                         let message_id = message_id.clone();
                                         let database = database.clone();
-                                        
+
                                         spawn(async move {
                                             let user_id = "hardcoded-david-maple";
-                                            
+
                                             if user_reacted {
                                                 // Remove reaction
                                                 if let Err(e) = database.remove_reaction(&message_id, user_id, &emoji_str).await {
@@ -1139,7 +1227,7 @@ fn ChatMessageView(
                     }
                 }
             }
-            
+
             // Reply button (only show for User and Cyrup messages)
             if !matches!(message.sender, MessageSender::System | MessageSender::Tool) {
                 button {
