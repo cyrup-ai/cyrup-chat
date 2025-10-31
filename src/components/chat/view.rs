@@ -103,6 +103,9 @@ pub fn ChatComponent() -> Element {
     
     // Track whether we've scrolled to first unread (one-time per conversation open)
     let mut has_scrolled_to_unread = use_signal(|| false);
+    
+    // Track whether conversation is ready (bootstrap complete)
+    let conversation_ready = use_signal(|| false);
 
     // Load conversation to check participant count for conditional input rendering
     let conversation_for_input = {
@@ -120,9 +123,11 @@ pub fn ChatComponent() -> Element {
     use_future({
         let database = environment.database.clone();
         let conversation_id = conversation_id;
+        let conversation_ready = conversation_ready;
         move || {
             let database = database.clone();
             let mut conversation_id = conversation_id;
+            let mut conversation_ready = conversation_ready;
             async move {
                 let current_id = conversation_id.read().clone();
                 // Check if selected conversation exists
@@ -136,6 +141,9 @@ pub fn ChatComponent() -> Element {
                         } else {
                             log::debug!("[Chat] Marked messages read for: {}", current_id.to_sql());
                         }
+                        
+                        // Mark conversation as ready
+                        conversation_ready.set(true);
                     }
                     Err(_) => {
                         // Conversation doesn't exist - create it
@@ -175,9 +183,12 @@ pub fn ChatComponent() -> Element {
                                 log::info!("[Chat] Created conversation: {}", id.to_sql());
                                 // Update the signal to match the actual created ID
                                 conversation_id.set(id);
+                                // Mark conversation as ready
+                                conversation_ready.set(true);
                             }
                             Err(e) => {
                                 log::error!("[Chat] Failed to create conversation: {}", e);
+                                // Don't mark as ready on error
                             }
                         }
                     }
@@ -703,7 +714,7 @@ pub fn ChatComponent() -> Element {
                                         }
                                     });
                                 },
-                                disabled: *is_sending.read(),
+                                disabled: *is_sending.read() || !*conversation_ready.read(),
                                 room_agents: room_agents,
                             }
                         }
@@ -725,12 +736,12 @@ pub fn ChatComponent() -> Element {
                                     placeholder: ui_text::chat_input_placeholder(),
                                     value: "{input_value.read()}",
                                     oninput: move |e| input_value.set(e.value()),
-                                    disabled: *is_sending.read(),
+                                    disabled: *is_sending.read() || !*conversation_ready.read(),
                                 }
                                 button {
                                     class: "px-8 py-4 bg-gradient-to-r from-[#0078ff] to-[#00a8ff] text-white rounded-xl font-bold cursor-pointer transition-all duration-200 hover:from-[#0088ff] hover:to-[#00b8ff] hover:shadow-[0_4px_20px_rgba(0,168,255,0.4)] hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0",
                                     r#type: "submit",
-                                    disabled: *is_sending.read(),
+                                    disabled: *is_sending.read() || !*conversation_ready.read(),
                                     "Send"
                                 }
                             }
