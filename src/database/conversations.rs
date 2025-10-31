@@ -28,7 +28,10 @@ impl Database {
     /// # Lazy Spawn Pattern
     /// New conversations start with agent_sessions = empty HashMap.
     /// Call update_agent_session() after spawning agents on first message.
-    pub async fn create_conversation(&self, conversation: &Conversation) -> Result<RecordId, String> {
+    pub async fn create_conversation(
+        &self,
+        conversation: &Conversation,
+    ) -> Result<RecordId, String> {
         // Validate participants not empty (follows pattern from notifications/content.rs:28)
         if conversation.participants.is_empty() {
             return Err("Conversation must have at least one participant".to_string());
@@ -91,11 +94,11 @@ impl Database {
             created_at: Datetime,
         }
 
-        let record: Option<ConversationRecord> =
-            self.client()
-                .select(id)
-                .await
-                .map_err(|e| format!("Failed to get conversation: {}", e))?;
+        let record: Option<ConversationRecord> = self
+            .client()
+            .select(id)
+            .await
+            .map_err(|e| format!("Failed to get conversation: {}", e))?;
 
         let record = record.ok_or_else(|| format!("Conversation not found: {}", id.to_sql()))?;
 
@@ -129,7 +132,10 @@ impl Database {
     /// # Performance
     /// For sidebar display with limit=10, this makes 1 + 10*2 = 21 queries.
     /// This is acceptable for small limits and avoids SurrealDB 3.0 subquery limitations.
-    pub async fn list_recent_conversations(&self, limit: usize) -> Result<Vec<ConversationSummary>, String> {
+    pub async fn list_recent_conversations(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<ConversationSummary>, String> {
         // Step 1: Get recent conversations (basic fields only)
         let query = r"
             SELECT id, title, participants, last_message_at
@@ -168,24 +174,24 @@ impl Database {
                   AND unread = true
                   AND deleted = false
             ";
-            
+
             let mut unread_response = self
                 .client()
                 .query(unread_query)
                 .bind(("conversation_id", conv.id.clone()))
                 .await
                 .map_err(|e| format!("Failed to get unread count: {}", e))?;
-            
+
             #[derive(Deserialize, SurrealValue)]
             struct CountResult {
                 count: u32,
             }
-            
+
             let unread_results: Vec<CountResult> = unread_response
                 .take(0)
                 .map_err(|e| format!("Failed to get unread count: {}", e))?;
             let unread_count = unread_results.first().map(|r| r.count).unwrap_or(0);
-            
+
             // Get last message preview
             let last_msg_query = r"
                 SELECT content, timestamp
@@ -195,19 +201,19 @@ impl Database {
                 ORDER BY timestamp DESC
                 LIMIT 1
             ";
-            
+
             let mut last_msg_response = self
                 .client()
                 .query(last_msg_query)
                 .bind(("conversation_id", conv.id.clone()))
                 .await
                 .map_err(|e| format!("Failed to get last message: {}", e))?;
-            
+
             #[derive(Deserialize, SurrealValue)]
             struct LastMessage {
                 content: String,
             }
-            
+
             let last_messages: Vec<LastMessage> = last_msg_response
                 .take(0)
                 .map_err(|e| format!("Failed to get last message: {}", e))?;
@@ -215,7 +221,7 @@ impl Database {
                 .first()
                 .map(|m| m.content.clone())
                 .unwrap_or_else(|| "No messages yet".to_string());
-            
+
             summaries.push(ConversationSummary {
                 id: conv.id,
                 title: conv.title,
@@ -243,24 +249,24 @@ impl Database {
     pub async fn list_conversations(&self) -> Result<Vec<ConversationSummary>, String> {
         // Query using SELECT with inline subqueries
         let query = r"
-            SELECT 
+            SELECT
                 id,
                 title,
                 participants,
                 (
                     SELECT content, timestamp
-                    FROM message 
-                    WHERE conversation_id = $parent.id 
-                      AND deleted = false 
-                    ORDER BY timestamp DESC 
+                    FROM message
+                    WHERE conversation_id = $parent.id
+                      AND deleted = false
+                    ORDER BY timestamp DESC
                     LIMIT 1
                 )[0].content OR 'No messages yet' AS last_message_preview,
                 last_message_at AS last_message_timestamp,
                 (
                     SELECT count() AS total
-                    FROM message 
-                    WHERE conversation_id = $parent.id 
-                      AND unread = true 
+                    FROM message
+                    WHERE conversation_id = $parent.id
+                      AND unread = true
                       AND deleted = false
                 )[0].total OR 0 AS unread_count
             FROM conversation
@@ -324,8 +330,8 @@ impl Database {
         title: &str,
     ) -> Result<(), String> {
         let query = r"
-            UPDATE conversation 
-            SET summary = $summary, title = $title 
+            UPDATE conversation
+            SET summary = $summary, title = $title
             WHERE id = $id
         ";
 
@@ -382,7 +388,7 @@ impl Database {
 
         self.client()
             .query(query)
-            .bind(("agent_id", agent_id.clone()))
+            .bind(("agent_id", agent_id.to_sql()))
             .bind(("session", session_id.to_string()))
             .bind(("conversation_id", conversation_id.clone()))
             .await
@@ -453,8 +459,8 @@ impl Database {
         timestamp: Datetime,
     ) -> Result<(), String> {
         let query = r"
-            UPDATE conversation 
-            SET last_message_at = $timestamp 
+            UPDATE conversation
+            SET last_message_at = $timestamp
             WHERE id = $conversation_id
         ";
 
