@@ -933,7 +933,7 @@ fn ChatMessageView(
     // State for emoji picker
     let mut show_emoji_picker = use_signal(|| false);
 
-    let (sender_classes, sender_name, sender_icon) = if message.is_error {
+    let (sender_classes, sender_name, _sender_icon) = if message.is_error {
         // Error messages get distinct red styling regardless of sender
         (
             "self-center bg-red-500/20 border-2 border-red-500/60 [box-shadow:0_0_15px_rgba(239,68,68,0.3)]",
@@ -976,7 +976,6 @@ fn ChatMessageView(
     let database_for_reactions = database.clone();
     let database_for_bookmark = database.clone();
     let bookmarked_msg_ids_for_button = bookmarked_msg_ids;
-    let message_id_for_delete = message.id.clone();
 
     rsx! {
         div {
@@ -992,84 +991,6 @@ fn ChatMessageView(
                 span {
                     class: "text-xs text-white/40",
                     {message.timestamp.format("%H:%M").to_string()}
-                }
-            }
-
-            // Action buttons (visible on hover)
-            div {
-                class: "absolute top-2 right-4 opacity-0 group-hover:opacity-100 transition-opacity duration-150 flex gap-1",
-                button {
-                    class: if message_pinned {
-                        "p-1.5 bg-blue-500/20 rounded text-white text-xs hover:bg-blue-500/30"
-                    } else {
-                        "p-1.5 bg-white/5 rounded text-white/40 text-xs hover:bg-white/10 hover:text-white/70"
-                    },
-                    onclick: move |_| {
-                        let message_id = message_id_for_pin.clone();
-                        let model_clone = model.clone();
-                        let is_pinned = message_pinned;
-                        spawn(async move {
-                            let result = if is_pinned {
-                                model_clone.unpin_status(message_id).await
-                            } else {
-                                model_clone.pin_status(message_id).await
-                            };
-                            if let Err(e) = result {
-                                log::error!("Failed to toggle pin: {}", e);
-                            }
-                        });
-                    },
-                    "📌"
-                }
-                button {
-                    class: if message_is_bookmarked {
-                        "p-1.5 bg-blue-500/20 rounded text-white text-xs hover:bg-blue-500/30"
-                    } else {
-                        "p-1.5 bg-white/5 rounded text-white/40 text-xs hover:bg-white/10 hover:text-white/70"
-                    },
-                    onclick: move |_| {
-                        let message_id = message_id_for_bookmark.clone();
-                        let database = database_for_bookmark.clone();
-                        let is_bookmarked = message_is_bookmarked;
-                        let mut bookmarked_ids = bookmarked_msg_ids_for_button;
-                        spawn(async move {
-                            let user_id = "hardcoded-david-maple";
-                            let result = if is_bookmarked {
-                                database.unbookmark_message(user_id, &message_id).await
-                            } else {
-                                database.bookmark_message(user_id, &message_id).await.map(|_| ())
-                            };
-
-                            match result {
-                                Ok(_) => {
-                                    // Update the local state
-                                    let mut ids = bookmarked_ids.read().clone();
-                                    if is_bookmarked {
-                                        ids.remove(&message_id);
-                                    } else {
-                                        ids.insert(message_id.clone());
-                                    }
-                                    bookmarked_ids.set(ids);
-                                }
-                                Err(e) => {
-                                    log::error!("Failed to toggle bookmark: {}", e);
-                                }
-                            }
-                        });
-                    },
-                    dangerous_inner_html: if message_is_bookmarked {
-                        crate::icons::ICON_BOOKMARK2
-                    } else {
-                        crate::icons::ICON_BOOKMARK1
-                    }
-                }
-                button {
-                    class: "p-1.5 bg-white/5 rounded text-white/40 text-xs hover:bg-white/10 hover:text-white/70",
-                    onclick: move |_| {
-                        let current = *show_emoji_picker.read();
-                        show_emoji_picker.set(!current);
-                    },
-                    "😊"
                 }
             }
 
