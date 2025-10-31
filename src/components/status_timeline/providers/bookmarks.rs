@@ -106,11 +106,11 @@ fn message_to_status_for_bookmark(msg: &Message) -> Status {
     use megalodon::entities::{Account, StatusVisibility};
 
     Status {
-        id: msg.id.0.to_sql(),
+        id: msg.id.to_sql(),
         uri: String::new(),
         created_at: *msg.timestamp,
         account: Account {
-            id: msg.conversation_id.0.to_sql(),
+            id: msg.conversation_id.to_sql(),
             username: msg.author.clone(),
             acct: msg.author.clone(),
             display_name: msg.author.clone(),
@@ -150,7 +150,7 @@ fn message_to_status_for_bookmark(msg: &Message) -> Status {
         favourites_count: 0,
         replies_count: 0,
         url: None,
-        in_reply_to_id: msg.in_reply_to.as_ref().map(|id| id.0.to_sql()),
+        in_reply_to_id: msg.in_reply_to.as_ref().map(|id| id.to_sql()),
         in_reply_to_account_id: None,
         reblog: None,
         poll: None,

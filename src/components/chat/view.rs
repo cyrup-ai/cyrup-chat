@@ -152,7 +152,7 @@ pub fn ChatComponent() -> Element {
 
                         // Generate unique ID if using default placeholder
                         let new_conversation_id = if current_id == RecordId::new("conversation", "default_chat") {
-                            RecordId::new("conversation", &uuid::Uuid::new_v4().to_string().replace("-", ""))
+                            RecordId::new("conversation", uuid::Uuid::new_v4().to_string().replace("-", ""))
                         } else {
                             current_id.clone()
                         };
@@ -196,7 +196,7 @@ pub fn ChatComponent() -> Element {
             let current_id = conversation_id.read().clone();
             spawn(async move {
                 // Mark messages as read when conversation is opened
-                if let Err(e) = database.mark_messages_as_read(current_id.clone()).await {
+                if let Err(e) = database.mark_messages_as_read(&current_id).await {
                     log::error!("[Chat] Failed to mark messages as read: {}", e);
                 }
 
@@ -487,7 +487,7 @@ pub fn ChatComponent() -> Element {
             is_sending.set(true);
 
             // Capture reply target before clearing
-            let parent_message_id = replying_to.read().as_ref().map(|(id, _)| id.clone());
+            let parent_message_id = replying_to.read().as_ref().and_then(|(id, _)| RecordId::parse_simple(id).ok());
             replying_to.set(None); // Clear reply state after capturing
 
             // Send message via agent_chat service (stateless, database-driven)
@@ -655,7 +655,7 @@ pub fn ChatComponent() -> Element {
                 
                 let room_agents = conversation_for_input.read().as_ref()
                     .and_then(|opt| opt.as_ref())
-                    .map(|conv| conv.participants.iter().map(|p| p.0.to_sql()).collect::<Vec<String>>())
+                    .map(|conv| conv.participants.iter().map(|p| p.to_sql()).collect::<Vec<String>>())
                     .unwrap_or_default();
                 
                 if is_multi_agent {
@@ -673,9 +673,10 @@ pub fn ChatComponent() -> Element {
                                     let mentioned = mention_parser::parse_mentions(&msg);
                                     
                                     // Filter to only participants in this conversation
-                                    let valid_mentions: Vec<String> = mentioned
+                                    let valid_mentions: Vec<RecordId> = mentioned
                                         .into_iter()
                                         .filter(|agent_id| room_agents_for_submit.contains(agent_id))
+                                        .filter_map(|agent_id| RecordId::parse_simple(&agent_id).ok())
                                         .collect();
                                     
                                     // Send with mentioned_agents parameter

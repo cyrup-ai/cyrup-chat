@@ -6,6 +6,7 @@ use crate::environment::Environment;
 use crate::widgets::ErrorBox;
 use dioxus::prelude::*;
 use std::sync::Arc;
+use surrealdb_types::RecordId;
 
 #[component]
 pub fn LoggedInApp(environment: Signal<Environment>, should_show_login: Signal<bool>) -> Element {
@@ -97,7 +98,7 @@ pub fn LoggedInApp(environment: Signal<Environment>, should_show_login: Signal<b
     use_context_provider(|| environment);
     
     // Provide selected conversation ID as context for chat component
-    let selected_conversation_id = use_signal(|| "conversation:default_chat".to_string());
+    let selected_conversation_id = use_signal(|| RecordId::new("conversation", "default_chat"));
     use_context_provider(|| selected_conversation_id);
 
     rsx! {

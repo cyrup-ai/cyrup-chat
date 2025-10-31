@@ -118,13 +118,13 @@ fn conversation_summary_to_status(
     use megalodon::entities::{Account, StatusVisibility};
 
     Status {
-        id: summary.id.0.to_sql(),
+        id: summary.id.to_sql(),
         uri: String::new(),
         created_at: *summary.last_message_timestamp,
         account: Account {
-            id: summary.id.0.to_sql(),
-            username: format!("conversation_{}", &summary.id.0.to_sql()[..8]),
-            acct: format!("conversation_{}", &summary.id.0.to_sql()[..8]),
+            id: summary.id.to_sql(),
+            username: format!("conversation_{}", &summary.id.to_sql()[..8]),
+            acct: format!("conversation_{}", &summary.id.to_sql()[..8]),
             display_name: summary.title.clone(),
             locked: false,
             discoverable: None,

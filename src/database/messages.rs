@@ -393,7 +393,7 @@ impl Database {
 
         self.client()
             .query(update_query)
-            .bind(("message_id", message_id))
+            .bind(("message_id", message_id.clone()))
             .bind(("pinned", new_state))
             .await
             .map_err(|e| format!("Failed to toggle pin: {}", e))?;
@@ -426,7 +426,7 @@ impl Database {
         let mut response = self
             .client()
             .query(query)
-            .bind(("conversation_id", conversation_id))
+            .bind(("conversation_id", conversation_id.clone()))
             .await
             .map_err(|e| format!("Failed to get pinned messages: {}", e))?;
 
@@ -464,7 +464,7 @@ impl Database {
 
         self.client()
             .query(query)
-            .bind(("message_id", message_id))
+            .bind(("message_id", message_id.clone()))
             .bind(("content", new_content))
             .await
             .map_err(|e| format!("Failed to update message content: {}", e))?;
@@ -491,7 +491,7 @@ impl Database {
         let mut response = self
             .client()
             .query(query)
-            .bind(("message_id", message_id))
+            .bind(("message_id", message_id.clone()))
             .await
             .map_err(|e| format!("Failed to get message: {}", e))?;
 
@@ -542,7 +542,7 @@ impl Database {
 
         self.client()
             .query(query)
-            .bind(("message_id", message_id))
+            .bind(("message_id", message_id.clone()))
             .await
             .map_err(|e| format!("Failed to unpin message: {}", e))?;
 
@@ -602,7 +602,7 @@ impl Database {
 
         self.client()
             .query(query)
-            .bind(("conversation_id", conversation_id))
+            .bind(("conversation_id", conversation_id.clone()))
             .await
             .map_err(|e| format!("Failed to mark messages as read: {}", e))?;
 

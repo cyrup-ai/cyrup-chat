@@ -159,7 +159,7 @@ pub async fn stream_agent_responses(
 /// Create agent message for database insertion
 fn create_agent_message(conversation_id: &RecordId, content: &str) -> Message {
     Message {
-        id: RecordId::default(), // DB generates actual ID
+        id: RecordId::new("message", "temp"), // DB generates actual ID
         conversation_id: conversation_id.clone(),
         author: "Assistant".to_string(),
         author_type: AuthorType::Agent,
@@ -177,7 +177,7 @@ fn create_agent_message(conversation_id: &RecordId, content: &str) -> Message {
 /// Create error message for database insertion
 fn create_error_message(conversation_id: &RecordId, error: &str) -> Message {
     Message {
-        id: RecordId::default(),
+        id: RecordId::new("message", "temp"),
         conversation_id: conversation_id.clone(),
         author: "system".to_string(),
         author_type: AuthorType::System,

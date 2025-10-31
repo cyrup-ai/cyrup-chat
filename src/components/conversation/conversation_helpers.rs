@@ -255,7 +255,7 @@ pub fn message_to_status_view_model(msg: &crate::view_model::message::Message) -
 
     // Create synthetic account for message author
     let account = AccountViewModel {
-        id: AccountId(msg.conversation_id.0.to_sql()),
+        id: AccountId(msg.conversation_id.to_sql()),
         image: String::new(),
         image_header: String::new(),
         username: msg.author.clone(),
@@ -284,7 +284,7 @@ pub fn message_to_status_view_model(msg: &crate::view_model::message::Message) -
     let (_, content_html) = clean_html(&msg.content);
 
     StatusViewModel {
-        id: StatusId(msg.id.0.to_sql()),
+        id: StatusId(msg.id.to_sql()),
         uri: String::new(),
         account,
         status_images: Vec::new(),
@@ -298,7 +298,7 @@ pub fn message_to_status_view_model(msg: &crate::view_model::message::Message) -
         replies_title: String::new(),
         replies_count: 0,
         is_reply: msg.in_reply_to.is_some(),
-        in_reply_to_id: msg.in_reply_to.as_ref().map(|id| id.0.to_sql()),
+        in_reply_to_id: msg.in_reply_to.as_ref().map(|id| id.to_sql()),
         has_reblogged: false,
         is_reblog: false,
         reblog_count: 0,

@@ -4,7 +4,7 @@
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use surrealdb_types::{Datetime, RecordId, SurrealValue, ToSql};
+use surrealdb_types::{Datetime, RecordId, SurrealValue};
 
 /// Message in an agent conversation
 ///

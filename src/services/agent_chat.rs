@@ -119,7 +119,7 @@ pub async fn send_message(
             user_message,
             user_msg_id,
             agent_id,
-            conversation.agent_sessions.get(agent_id).cloned(),
+            conversation.agent_sessions.get(&agent_id.to_sql()).cloned(),
         )
         .await
     } else {
@@ -202,7 +202,7 @@ async fn send_to_multiple_agents(
     user_message: String,
     user_msg_id: RecordId,
     target_agents: Vec<RecordId>,
-    agent_sessions: std::collections::HashMap<RecordId, String>,
+    agent_sessions: std::collections::HashMap<String, String>,
 ) -> Result<(), String> {
     log::info!(
         "[Chat] Multi-agent mode: {} agents",
@@ -217,7 +217,7 @@ async fn send_to_multiple_agents(
         let conversation_id = conversation_id.clone();
         let user_message = user_message.clone();
         let user_msg_id = user_msg_id.clone();
-        let existing_session_id = agent_sessions.get(&agent_id).cloned();
+        let existing_session_id = agent_sessions.get(&agent_id.to_sql()).cloned();
 
         agent_tasks.push(async move {
             log::info!("[Chat] Spawning agent: {}", agent_id.to_sql());
@@ -366,7 +366,7 @@ async fn stream_agent_responses(
                                 // First chunk: INSERT message
                                 if message_id.is_none() {
                                     let msg = Message {
-                                        id: RecordId::default(),
+                                        id: RecordId::new("message", "temp"),
                                         conversation_id: conversation_id.clone(),
                                         author: "Assistant".to_string(),
                                         author_type: AuthorType::Agent,
@@ -486,7 +486,7 @@ async fn stream_agent_responses(
 
                     // Save error message
                     let error_msg = Message {
-                        id: RecordId::default(),
+                        id: RecordId::new("message", "temp"),
                         conversation_id: conversation_id.clone(),
                         author: "system".to_string(),
                         author_type: AuthorType::System,
@@ -516,7 +516,7 @@ async fn stream_agent_responses(
                 log::error!("[AgentChat] Stream error: {}", e);
 
                 let error_msg = Message {
-                    id: RecordId::default(),
+                    id: RecordId::new("message", "temp"),
                     conversation_id: conversation_id.clone(),
                     author: "system".to_string(),
                     author_type: AuthorType::System,

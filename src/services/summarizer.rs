@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
-use surrealdb_types::RecordId;
+use surrealdb_types::{RecordId, ToSql};
 
 use crate::database::Database;
 

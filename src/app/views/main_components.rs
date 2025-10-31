@@ -264,7 +264,7 @@ pub fn ChatHistorySidebar(auth_state: AuthState) -> Element {
                                             "px-4 py-3 mb-2 rounded-lg cursor-pointer transition-all duration-200 hover:bg-white/8 hover:border-white/15"
                                         },
                                         onclick: move |_| {
-                                            log::debug!("[ChatHistory] Selected conversation: {}", convo_id_for_click);
+                                            log::debug!("[ChatHistory] Selected conversation: {}", convo_id_for_click.to_sql());
                                             selected_conversation_id.set(convo_id_for_click.clone());
                                         },
                                         div {

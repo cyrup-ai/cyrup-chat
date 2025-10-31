@@ -5,7 +5,7 @@
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use surrealdb_types::{Datetime, RecordId, SurrealValue, ToSql};
+use surrealdb_types::{Datetime, RecordId, SurrealValue};
 use std::collections::HashMap;
 
 
@@ -33,7 +33,7 @@ pub struct Conversation {
     pub participants: Vec<RecordId>,
     pub summary: String,
     /// Lazy spawn pattern: Maps agent_id → session_id for active agents
-    pub agent_sessions: HashMap<RecordId, String>,
+    pub agent_sessions: HashMap<String, String>,
     pub last_summarized_message_id: Option<RecordId>,
     pub last_message_at: Datetime,
     pub created_at: Datetime,

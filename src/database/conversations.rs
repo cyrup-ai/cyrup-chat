@@ -40,7 +40,7 @@ impl Database {
             title: String,
             participants: Vec<RecordId>,
             summary: String,
-            agent_sessions: HashMap<RecordId, String>,
+            agent_sessions: HashMap<String, String>,
             last_message_at: Datetime,
         }
 
@@ -85,7 +85,7 @@ impl Database {
             title: String,
             participants: Vec<RecordId>,
             summary: String,
-            agent_sessions: HashMap<RecordId, String>,
+            agent_sessions: HashMap<String, String>,
             last_summarized_message_id: Option<RecordId>,
             last_message_at: Datetime,
             created_at: Datetime,
@@ -160,14 +160,11 @@ impl Database {
         // Step 2: For each conversation, get unread count and last message (N+1 pattern)
         let mut summaries = Vec::new();
         for conv in conversations {
-            let conv_id_str = conv.id.to_sql();
-            let conv_id_key = conv_id_str.strip_prefix("conversation:").unwrap_or(&conv_id_str).to_string();
-            
             // Get unread count (proven pattern from messages.rs:227-248)
             let unread_query = r"
                 SELECT count() AS count
                 FROM message
-                WHERE conversation_id = type::record('conversation', $conversation_id)
+                WHERE conversation_id = $conversation_id
                   AND unread = true
                   AND deleted = false
             ";
@@ -175,7 +172,7 @@ impl Database {
             let mut unread_response = self
                 .client()
                 .query(unread_query)
-                .bind(("conversation_id", conv_id_key.clone()))
+                .bind(("conversation_id", conv.id.clone()))
                 .await
                 .map_err(|e| format!("Failed to get unread count: {}", e))?;
             
@@ -193,7 +190,7 @@ impl Database {
             let last_msg_query = r"
                 SELECT content, timestamp
                 FROM message
-                WHERE conversation_id = type::record('conversation', $conversation_id)
+                WHERE conversation_id = $conversation_id
                   AND deleted = false
                 ORDER BY timestamp DESC
                 LIMIT 1
@@ -202,7 +199,7 @@ impl Database {
             let mut last_msg_response = self
                 .client()
                 .query(last_msg_query)
-                .bind(("conversation_id", conv_id_key.clone()))
+                .bind(("conversation_id", conv.id.clone()))
                 .await
                 .map_err(|e| format!("Failed to get last message: {}", e))?;
             

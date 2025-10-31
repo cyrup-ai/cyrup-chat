@@ -4,7 +4,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use surrealdb_types::{RecordId, SurrealValue, ToSql};
+use surrealdb_types::{RecordId, SurrealValue};
 
 /// Agent template configuration
 ///

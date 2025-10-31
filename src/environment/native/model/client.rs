@@ -38,8 +38,10 @@ impl Model {
     /// * `Ok(Conversation)` - Full conversation details
     /// * `Err(ModelError)` - Not found or query failed
     pub async fn get_conversation(&self, id: &str) -> Result<Conversation, ModelError> {
+        let record_id = RecordId::parse_simple(id)
+            .map_err(|e| ModelError::QueryFailed(format!("Invalid conversation ID: {}", e)))?;
         self.database()
-            .get_conversation(id)
+            .get_conversation(&record_id)
             .await
             .map_err(|e| ModelError::QueryFailed(format!("Failed to get conversation: {}", e)))
     }
@@ -56,8 +58,10 @@ impl Model {
     /// * `Ok(Vec<Message>)` - All messages in conversation
     /// * `Err(ModelError)` - Query failed
     pub async fn get_messages(&self, conversation_id: &str) -> Result<Vec<Message>, ModelError> {
+        let record_id = RecordId::parse_simple(conversation_id)
+            .map_err(|e| ModelError::QueryFailed(format!("Invalid conversation ID: {}", e)))?;
         self.database()
-            .get_all_messages(conversation_id)
+            .get_all_messages(&record_id)
             .await
             .map_err(|e| ModelError::QueryFailed(format!("Failed to get messages: {}", e)))
     }
@@ -88,10 +92,13 @@ impl Model {
         conversation_id: &str,
         message: &str,
     ) -> Result<(), ModelError> {
+        let conversation_record_id = RecordId::parse_simple(conversation_id)
+            .map_err(|e| ModelError::QueryFailed(format!("Invalid conversation ID: {}", e)))?;
+
         // Get conversation to check agent_session_id
         let conversation = self
             .database()
-            .get_conversation(conversation_id)
+            .get_conversation(&conversation_record_id)
             .await
             .map_err(|e| ModelError::QueryFailed(format!("Failed to get conversation: {}", e)))?;
 
@@ -101,20 +108,19 @@ impl Model {
             log::info!("Lazy spawning agents for conversation: {}", conversation_id);
 
             // For single-agent conversations, spawn the one participant
-            let agent_id = &conversation.participants[0].0;
-            let agent_id_str = agent_id.to_sql();
+            let agent_id = &conversation.participants[0];
 
             // Get agent template from database
             let template = self
                 .database()
-                .get_template(&agent_id_str)
+                .get_template(agent_id)
                 .await
                 .map_err(|e| ModelError::QueryFailed(format!("Failed to get template: {}", e)))?;
 
             // Get recent messages for context (dynamic limit based on token budget)
             let recent_messages = self
                 .database()
-                .get_recent_messages(conversation_id)
+                .get_recent_messages(&conversation_record_id)
                 .await
                 .map_err(|e| {
                     ModelError::QueryFailed(format!("Failed to get recent messages: {}", e))
@@ -138,7 +144,7 @@ impl Model {
 
             // Update conversation with session_id for this agent
             self.database()
-                .update_agent_session(conversation_id, &agent_id_str, &session_id)
+                .update_agent_session(&conversation_record_id, agent_id, &session_id)
                 .await
                 .map_err(|e| ModelError::QueryFailed(format!("Failed to update session: {}", e)))?;
         }
@@ -151,8 +157,8 @@ impl Model {
 
         // Save user message to database
         let user_message = Message {
-            id: MessageId(surrealdb_types::RecordId::new("message", uuid::Uuid::new_v4().to_string())),
-            conversation_id: ConversationId::from(conversation_id),
+            id: RecordId::new("message", uuid::Uuid::new_v4().to_string()),
+            conversation_id: conversation_record_id.clone(),
             author: "David Maple".to_string(), // Q39: Hardcoded user for MVP
             author_type: AuthorType::Human,
             content: message.to_string(),
@@ -185,8 +191,10 @@ impl Model {
     /// * `Ok(Message)` - Message details
     /// * `Err(ModelError)` - Not found or query failed
     pub async fn single_status(&self, message_id: String) -> Result<Message, ModelError> {
+        let record_id = RecordId::parse_simple(&message_id)
+            .map_err(|e| ModelError::QueryFailed(format!("Invalid message ID: {}", e)))?;
         self.database()
-            .get_message(&message_id)
+            .get_message(&record_id)
             .await
             .map_err(|e| ModelError::QueryFailed(format!("Failed to get message: {}", e)))
     }
@@ -204,7 +212,7 @@ impl Model {
         let message = self.single_status(message_id).await?;
 
         // Then get all messages in that conversation
-        let conv_id_str = message.conversation_id.0.to_sql();
+        let conv_id_str = message.conversation_id.to_sql();
         self.get_messages(&conv_id_str).await
     }
 
@@ -223,6 +231,8 @@ impl Model {
         favorited: bool,
     ) -> Result<Status, ModelError> {
         let user_id = "hardcoded-david-maple"; // Q39: MVP hardcoded user
+        let record_id = RecordId::parse_simple(&message_id)
+            .map_err(|e| ModelError::QueryFailed(format!("Invalid message ID: {}", e)))?;
 
         if favorited {
             self.database()
@@ -241,7 +251,7 @@ impl Model {
         // Fetch updated message and convert to Status for UI
         let message = self
             .database()
-            .get_message(&message_id)
+            .get_message(&record_id)
             .await
             .map_err(|e| {
                 ModelError::QueryFailed(format!("Failed to fetch updated message: {}", e))
@@ -265,6 +275,8 @@ impl Model {
         bookmarked: bool,
     ) -> Result<Status, ModelError> {
         let user_id = "hardcoded-david-maple"; // Q39: MVP hardcoded user
+        let record_id = RecordId::parse_simple(&message_id)
+            .map_err(|e| ModelError::QueryFailed(format!("Invalid message ID: {}", e)))?;
 
         if bookmarked {
             self.database()
@@ -283,7 +295,7 @@ impl Model {
         // Fetch updated message and convert to Status for UI
         let message = self
             .database()
-            .get_message(&message_id)
+            .get_message(&record_id)
             .await
             .map_err(|e| {
                 ModelError::QueryFailed(format!("Failed to fetch updated message: {}", e))
@@ -301,8 +313,10 @@ impl Model {
     /// * `Ok(())` - Message marked as deleted
     /// * `Err(ModelError)` - Database update failed
     pub async fn delete_status(&self, message_id: String) -> Result<(), ModelError> {
+        let record_id = RecordId::parse_simple(&message_id)
+            .map_err(|e| ModelError::QueryFailed(format!("Invalid message ID: {}", e)))?;
         self.database()
-            .delete_message(&message_id)
+            .delete_message(&record_id)
             .await
             .map_err(|e| ModelError::QueryFailed(format!("Failed to delete message: {}", e)))
     }
@@ -316,15 +330,18 @@ impl Model {
     /// * `Ok(Status)` - Updated message as Status for UI
     /// * `Err(ModelError)` - Database update failed
     pub async fn pin_status(&self, message_id: String) -> Result<Status, ModelError> {
+        let record_id = RecordId::parse_simple(&message_id)
+            .map_err(|e| ModelError::QueryFailed(format!("Invalid message ID: {}", e)))?;
+
         self.database()
-            .pin_message(&message_id)
+            .pin_message(&record_id)
             .await
             .map_err(|e| ModelError::QueryFailed(format!("Failed to pin message: {}", e)))?;
 
         // Fetch updated message and convert to Status for UI
         let message = self
             .database()
-            .get_message(&message_id)
+            .get_message(&record_id)
             .await
             .map_err(|e| {
                 ModelError::QueryFailed(format!("Failed to fetch updated message: {}", e))
@@ -342,15 +359,18 @@ impl Model {
     /// * `Ok(Status)` - Updated message as Status for UI
     /// * `Err(ModelError)` - Database update failed
     pub async fn unpin_status(&self, message_id: String) -> Result<Status, ModelError> {
+        let record_id = RecordId::parse_simple(&message_id)
+            .map_err(|e| ModelError::QueryFailed(format!("Invalid message ID: {}", e)))?;
+
         self.database()
-            .unpin_message(&message_id)
+            .unpin_message(&record_id)
             .await
             .map_err(|e| ModelError::QueryFailed(format!("Failed to unpin message: {}", e)))?;
 
         // Fetch updated message and convert to Status for UI
         let message = self
             .database()
-            .get_message(&message_id)
+            .get_message(&record_id)
             .await
             .map_err(|e| {
                 ModelError::QueryFailed(format!("Failed to fetch updated message: {}", e))
@@ -386,10 +406,13 @@ impl Model {
     /// * `Ok(Status)` - Archived message as Status for UI
     /// * `Err(ModelError)` - Archive operation failed
     pub async fn archive_status(&self, message_id: String) -> Result<Status, ModelError> {
+        let record_id = RecordId::parse_simple(&message_id)
+            .map_err(|e| ModelError::QueryFailed(format!("Invalid message ID: {}", e)))?;
+
         // Get the message to archive
         let message = self
             .database()
-            .get_message(&message_id)
+            .get_message(&record_id)
             .await
             .map_err(|e| {
                 ModelError::QueryFailed(format!("Failed to get message for archiving: {}", e))
@@ -470,7 +493,7 @@ impl Model {
         // Spawn background task for each conversation with an active agent session
         for conv_summary in conversations {
             // Get full conversation details to access agent_session_id
-            let conv_id_str = conv_summary.id.0.to_sql();
+            let conv_id_str = conv_summary.id.to_sql();
             let conversation = match self.get_conversation(&conv_id_str).await {
                 Ok(conv) => conv,
                 Err(e) => {
@@ -486,7 +509,7 @@ impl Model {
 
             let agent_manager = self.agent_manager().clone();
             let callback = callback.clone();
-            let conv_id = conversation.id.0.clone();
+            let conv_id = conversation.id.clone();
             let conv_title = conversation.title.clone();
 
             log::info!(
@@ -738,8 +761,8 @@ fn convert_serialized_to_message(
     let content = extract_message_content(serialized)?;
 
     Some(Message {
-        id: RecordId::new("message", &uuid::Uuid::new_v4().to_string()),
-        conversation_id: RecordId::from_table_key("conversation", conversation_id),
+        id: RecordId::new("message", uuid::Uuid::new_v4().to_string()),
+        conversation_id: RecordId::new("conversation", conversation_id),
         author,
         author_type,
         content,
@@ -800,7 +823,7 @@ fn create_conversation_entity(
 
     // Create status from message
     let status = Status {
-        id: message.id.0.to_sql(),
+        id: message.id.to_sql(),
         uri: String::new(),
         created_at: *message.timestamp,
         account: agent_account.clone(),
@@ -920,11 +943,11 @@ fn message_to_notification(message: Message) -> crate::environment::model::Notif
     use megalodon::entities::Account;
 
     Notification {
-        id: message.id.0.to_sql(),
+        id: message.id.to_sql(),
         r#type: NotificationType::Mention,
         created_at: *message.timestamp,
         account: Some(Account {
-            id: message.conversation_id.0.to_sql(),
+            id: message.conversation_id.to_sql(),
             username: message.author.clone(),
             acct: message.author.clone(),
             display_name: message.author.clone(),
@@ -961,7 +984,7 @@ fn message_to_notification(message: Message) -> crate::environment::model::Notif
 /// Create megalodon Account from message author
 fn create_account_from_message(message: &Message) -> megalodon::entities::Account {
     megalodon::entities::Account {
-        id: message.conversation_id.0.to_sql(),
+        id: message.conversation_id.to_sql(),
         username: message.author.clone(),
         acct: message.author.clone(),
         display_name: message.author.clone(),
@@ -994,11 +1017,11 @@ fn create_account_from_message(message: &Message) -> megalodon::entities::Accoun
 /// Transform AgentTemplate to Status for UI listing
 fn template_to_status(template: crate::view_model::AgentTemplate) -> Status {
     Status {
-        id: template.id.0.to_sql(),
+        id: template.id.to_sql(),
         uri: String::new(),
         created_at: chrono::Utc::now(),
         account: megalodon::entities::Account {
-            id: template.id.0.to_sql(),
+            id: template.id.to_sql(),
             username: template.name.clone(),
             acct: template.name.clone(),
             display_name: template.name.clone(),
@@ -1060,12 +1083,12 @@ fn template_to_status(template: crate::view_model::AgentTemplate) -> Status {
 /// Transform Message to Status with favorite status for UI
 fn message_to_status(message: &Message, is_favourited: bool) -> Status {
     Status {
-        id: message.id.0.to_sql(),
+        id: message.id.to_sql(),
         uri: String::new(),
         created_at: *message.timestamp,
         account: create_account_from_message(message),
         content: message.content.clone(),
-        in_reply_to_id: message.in_reply_to.as_ref().map(|id| id.0.to_sql()),
+        in_reply_to_id: message.in_reply_to.as_ref().map(|id| id.to_sql()),
         visibility: StatusVisibility::Public,
         favourited: Some(is_favourited),
         favourites_count: if is_favourited { 1 } else { 0 },
@@ -1098,12 +1121,12 @@ fn message_to_status(message: &Message, is_favourited: bool) -> Status {
 /// Transform Message to Status with bookmark status for UI
 fn message_to_status_with_bookmark(message: &Message, is_bookmarked: bool) -> Status {
     Status {
-        id: message.id.0.to_sql(),
+        id: message.id.to_sql(),
         uri: String::new(),
         created_at: *message.timestamp,
         account: create_account_from_message(message),
         content: message.content.clone(),
-        in_reply_to_id: message.in_reply_to.as_ref().map(|id| id.0.to_sql()),
+        in_reply_to_id: message.in_reply_to.as_ref().map(|id| id.to_sql()),
         visibility: StatusVisibility::Public,
         bookmarked: Some(is_bookmarked),
         sensitive: false,
@@ -1136,12 +1159,12 @@ fn message_to_status_with_bookmark(message: &Message, is_bookmarked: bool) -> St
 /// Transform Message to Status (simple version for general use)
 fn message_to_status_simple(message: &Message) -> Status {
     Status {
-        id: message.id.0.to_sql(),
+        id: message.id.to_sql(),
         uri: String::new(),
         created_at: *message.timestamp,
         account: create_account_from_message(message),
         content: message.content.clone(),
-        in_reply_to_id: message.in_reply_to.as_ref().map(|id| id.0.to_sql()),
+        in_reply_to_id: message.in_reply_to.as_ref().map(|id| id.to_sql()),
         visibility: StatusVisibility::Public,
         sensitive: false,
         spoiler_text: String::new(),

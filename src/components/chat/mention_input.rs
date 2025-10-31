@@ -52,12 +52,12 @@ pub fn MentionInput(
                 if let Some(Ok(all_templates)) = templates.read().as_ref() {
                     let filtered: Vec<AgentTemplate> = all_templates
                         .iter()
-                        .filter(|t| room_agents.contains(&t.id.0.to_sql()))  // Only room participants
+                        .filter(|t| room_agents.contains(&t.id.to_sql()))  // Only room participants
                         .filter(|t| {
                             // Fuzzy match: name or ID contains filter
                             let filter_lower = filter.to_lowercase();
                             t.name.to_lowercase().contains(&filter_lower)
-                                || t.id.0.to_sql().to_lowercase().contains(&filter_lower)
+                                || t.id.to_sql().to_lowercase().contains(&filter_lower)
                         })
                         .cloned()
                         .collect();
@@ -114,7 +114,7 @@ pub fn MentionInput(
                     class: "absolute bottom-full mb-2 w-full bg-[#1a1a2e] border border-white/10 rounded-lg shadow-lg max-h-48 overflow-y-auto",
                     {options.iter().map(|agent| {
                         let agent_name = agent.name.clone();
-                        let agent_id = agent.id.0.to_sql();
+                        let agent_id = agent.id.to_sql();
 
                         rsx! {
                             div {

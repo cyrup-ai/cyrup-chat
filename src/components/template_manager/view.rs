@@ -15,7 +15,7 @@ use crate::app::context::use_environment;
 use crate::view_model::agent::{AgentModel, AgentTemplate};
 use chrono::Utc;
 use dioxus::prelude::*;
-use surrealdb_types::ToSql;
+use surrealdb_types::{RecordId, ToSql};
 
 /// Main template manager component
 ///
@@ -85,7 +85,9 @@ pub fn TemplateManagerComponent() -> Element {
 
         // Build template from form
         let template = AgentTemplate {
-            id: current_editing_id.clone().unwrap_or_default().into(),
+            id: current_editing_id.clone()
+                .and_then(|s| RecordId::parse_simple(&s).ok())
+                .unwrap_or_else(|| RecordId::new("agent_template", "temp")),
             name: form_name.read().clone(),
             system_prompt: form_system_prompt.read().clone(),
             model: form_model.read().clone(),
@@ -112,12 +114,12 @@ pub fn TemplateManagerComponent() -> Element {
                 // Creating new template
                 db.create_template(&template)
                     .await
-                    .map(|id| log::info!("Created template: {}", id))
+                    .map(|id| log::info!("Created template: {}", id.to_sql()))
             } else {
                 // Updating existing template
                 db.update_template(&template)
                     .await
-                    .map(|_| log::info!("Updated template: {}", template.id.0.to_sql()))
+                    .map(|_| log::info!("Updated template: {}", template.id.to_sql()))
             };
 
             if let Err(e) = result {
@@ -149,7 +151,7 @@ pub fn TemplateManagerComponent() -> Element {
         form_icon.set(template.icon.clone().unwrap_or_default());
         form_color.set(template.color.clone().unwrap_or_default());
 
-        editing_id.set(Some(template.id.0.to_sql()));
+        editing_id.set(Some(template.id.to_sql()));
     };
 
     // Delete handler
@@ -158,7 +160,14 @@ pub fn TemplateManagerComponent() -> Element {
         let db = env.read().model.database().clone();
 
         spawn(async move {
-            match db.delete_template(&id).await {
+            let record_id = match surrealdb_types::RecordId::parse_simple(&id) {
+                Ok(rid) => rid,
+                Err(e) => {
+                    log::error!("Invalid template ID: {}", e);
+                    return;
+                }
+            };
+            match db.delete_template(&record_id).await {
                 Ok(_) => {
                     log::info!("Deleted template: {}", id);
                     // Reload templates
@@ -218,7 +227,7 @@ pub fn TemplateManagerComponent() -> Element {
                         class: "template-list",
                         for template in templates.read().iter() {
                             TemplateCard {
-                                key: "{template.id.0.to_sql()}",
+                                key: "{template.id.to_sql()}",
                                 template: template.clone(),
                                 on_edit: handle_edit,
                                 on_delete: handle_delete,
@@ -242,7 +251,7 @@ fn TemplateCard(
 ) -> Element {
     // Clone template for use in both closures
     let template_for_edit = template.clone();
-    let template_id = template.id.0.to_sql();
+    let template_id = template.id.to_sql();
 
     rsx! {
         div {
