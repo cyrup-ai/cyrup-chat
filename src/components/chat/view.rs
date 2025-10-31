@@ -963,19 +963,9 @@ fn ChatMessageView(
         ""
     };
 
-    // Clone fields before closures to avoid ownership conflict
-    let message_id_for_pin = message.id.clone();
-    let message_pinned = message.pinned;
-    let message_id_for_bookmark = message.id.clone();
-    let message_is_bookmarked = bookmarked_msg_ids.read().contains(&message.id);
+    // Clone fields for reply functionality
     let message_id_for_reply = message.id.clone();
     let message_sender = message.sender.clone();
-    let message_id_for_emoji_picker = message.id.clone();
-    let database_for_emoji_picker = database.clone();
-    let message_id_for_reactions = message.id.clone();
-    let database_for_reactions = database.clone();
-    let database_for_bookmark = database.clone();
-    let bookmarked_msg_ids_for_button = bookmarked_msg_ids;
 
     rsx! {
         div {
@@ -992,9 +982,21 @@ fn ChatMessageView(
                     class: "text-xs text-white/40",
                     {message.timestamp.format("%H:%M").to_string()}
                 }
+                button {
+                    class: "ml-auto text-xs text-white/30 hover:text-white/60 opacity-0 group-hover:opacity-100 transition-opacity",
+                    onclick: move |_| {
+                        let message_id = message_id_for_reply.clone();
+                        let author = match message_sender {
+                            MessageSender::User => "You".to_string(),
+                            MessageSender::Cyrup => "Assistant".to_string(),
+                            MessageSender::System => "System".to_string(),
+                            MessageSender::Tool => "Tool".to_string(),
+                        };
+                        on_reply.call((message_id, author));
+                    },
+                    "Reply"
+                }
             }
-
-
 
             // Show "Reply to [author]" if this is a reply
             if let Some(reply_author) = message.reply_to_author.as_ref() {
